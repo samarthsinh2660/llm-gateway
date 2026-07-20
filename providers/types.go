@@ -89,10 +89,12 @@ type ChatCompletionResponse struct {
 
 // Choice represents a completion choice.
 type Choice struct {
-	Index        int      `json:"index"`
-	Message      *Message `json:"message,omitempty"`
-	Delta        *Delta   `json:"delta,omitempty"`
-	FinishReason string   `json:"finish_reason,omitempty"`
+	Index   int      `json:"index"`
+	Message *Message `json:"message,omitempty"`
+	Delta   *Delta   `json:"delta,omitempty"`
+	// pointer, no omitempty: OpenAI streaming emits "finish_reason": null on
+	// intermediate chunks, and nil must serialize as null rather than vanish.
+	FinishReason *string `json:"finish_reason"`
 }
 
 // Delta represents incremental content in a streaming response.
@@ -126,7 +128,7 @@ type ModelsResponse struct {
 }
 
 // GetContentString extracts the string content from a message.
-// Returns empty string if content is not a simple string.
+// returns empty string if content is not a simple string.
 func (m *Message) GetContentString() string {
 	if s, ok := m.Content.(string); ok {
 		return s

@@ -41,26 +41,21 @@ This gives you embedding-based routing with a fallback. The sections below expla
 
 The router evaluates layers in order and stops at the first confident result.
 
+```mermaid
+flowchart TD
+    req[request arrives] --> explicit{explicit model?}
+    explicit -- yes --> use1[use that model — bypass routing]
+    explicit -- no --> heur{heuristics match?}
+    heur -- yes --> use2[use matched route]
+    heur -- no --> embed{embeddings score?}
+    embed -- ">= threshold" --> use3[use matched route]
+    embed -- "ambiguous: >= ambiguous_threshold but < threshold" --> classifier{classifier match?}
+    embed -- "below ambiguous_threshold / no match" --> deflt[default route]
+    classifier -- yes --> use4[use classified route]
+    classifier -- no --> deflt
 ```
-Request arrives
-    |
-    v
-1. Explicit model? ----yes----> use that model (bypass routing)
-    |no
-    v
-2. Heuristics match? --yes----> use matched route
-    |no
-    v
-3. Embeddings match?
-    |--confident (>= threshold)----> use matched route
-    |--ambiguous (>= ambiguous_threshold but < threshold)----> escalate to classifier
-    |--no match
-    v
-4. Classifier match? --yes----> use classified route
-    |no
-    v
-5. Default route
-```
+
+When embeddings are not configured at all, an enabled classifier runs directly after heuristics as the primary classification layer; when embeddings are configured, the classifier is consulted only for results in the ambiguous window (see [When the Classifier Runs](#when-the-classifier-runs)).
 
 Each step appends to a **cascade log** that appears in the gateway's log output. For example:
 

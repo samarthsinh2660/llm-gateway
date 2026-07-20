@@ -33,8 +33,13 @@ func NewEmbeddingMatcher(ctx context.Context, client Embedder, routes []RouteCon
 		comparison: cfg.Comparison,
 	}
 
-	if em.comparison == "" {
+	switch em.comparison {
+	case "":
 		em.comparison = "centroid"
+	case "centroid", "max", "average":
+		// supported
+	default:
+		return nil, fmt.Errorf("unknown semantic comparison '%s' (expected 'centroid', 'max', or 'average')", em.comparison)
 	}
 
 	if cfg.CacheEmbeddings {

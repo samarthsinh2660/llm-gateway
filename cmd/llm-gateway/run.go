@@ -17,7 +17,7 @@ func newRunCommand() *runCommand {
 	rc := &runCommand{}
 	rc.cmd = &cobra.Command{
 		Use:   "run <configPath>",
-		Short: "Run the llm-gateway server",
+		Short: "run the llm-gateway server",
 		Args:  cobra.ExactArgs(1),
 		RunE:  rc.run,
 	}

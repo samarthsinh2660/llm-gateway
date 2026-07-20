@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/michaelquigley/df/dd"
@@ -78,7 +79,6 @@ type HealthCheckConfig struct {
 
 type MetricsConfig struct {
 	Enabled bool
-	Listen  string // address for metrics server (default: ":9090")
 }
 
 type APIKeysConfig struct {
@@ -102,10 +102,143 @@ func LoadConfig(path string) (*Config, error) {
 	if err := agora.ResolveConfig(cfg.Agora); err != nil {
 		return nil, err
 	}
+	if err := cfg.expandEnv(); err != nil {
+		return nil, err
+	}
+	cfg.normalize()
 	if err := cfg.validateAgora(); err != nil {
 		return nil, err
 	}
+	if err := cfg.validateProviders(); err != nil {
+		return nil, err
+	}
 	return cfg, nil
+}
+
+// expandEnv resolves ${VAR} references in the config's secret-bearing string
+// fields once, at load, so every downstream gate reads the same expanded
+// values. a value written non-empty that resolves empty is a directed error
+// (an unset variable); a value left empty stays "not configured".
+func (c *Config) expandEnv() error {
+	expand := func(field string, value *string) error {
+		if *value == "" {
+			return nil
+		}
+		expanded := os.ExpandEnv(*value)
+		if expanded == "" {
+			return fmt.Errorf("%s resolves empty (unset environment variable?)", field)
+		}
+		*value = expanded
+		return nil
+	}
+
+	if c.Providers != nil {
+		if p := c.Providers.OpenAI; p != nil {
+			if err := expand("providers.openai.api_key", &p.APIKey); err != nil {
+				return err
+			}
+			if err := expand("providers.openai.base_url", &p.BaseURL); err != nil {
+				return err
+			}
+		}
+		if p := c.Providers.Anthropic; p != nil {
+			if err := expand("providers.anthropic.api_key", &p.APIKey); err != nil {
+				return err
+			}
+			if err := expand("providers.anthropic.base_url", &p.BaseURL); err != nil {
+				return err
+			}
+		}
+		if l := c.Providers.Local; l != nil {
+			if err := expand("providers.local.base_url", &l.BaseURL); err != nil {
+				return err
+			}
+			for i := range l.Endpoints {
+				field := fmt.Sprintf("providers.local.endpoints[%d].base_url", i)
+				if err := expand(field, &l.Endpoints[i].BaseURL); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	if c.APIKeys != nil && c.APIKeys.Enabled {
+		for i := range c.APIKeys.Keys {
+			entry := &c.APIKeys.Keys[i]
+			field := fmt.Sprintf("api_keys.keys[%d] ('%s')", i, entry.Name)
+			if entry.Key == "" {
+				return fmt.Errorf("%s has an empty key", field)
+			}
+			if err := expand(field+" key", &entry.Key); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// normalize trims whitespace from agora tunnel names so the provider init
+// gates and collectAgoraTunnels read identical values.
+func (c *Config) normalize() {
+	if c.Providers == nil {
+		return
+	}
+	if p := c.Providers.OpenAI; p != nil {
+		p.AgoraTunnel = strings.TrimSpace(p.AgoraTunnel)
+	}
+	if p := c.Providers.Anthropic; p != nil {
+		p.AgoraTunnel = strings.TrimSpace(p.AgoraTunnel)
+	}
+	if l := c.Providers.Local; l != nil {
+		l.AgoraTunnel = strings.TrimSpace(l.AgoraTunnel)
+		for i := range l.Endpoints {
+			l.Endpoints[i].AgoraTunnel = strings.TrimSpace(l.Endpoints[i].AgoraTunnel)
+		}
+	}
+}
+
+// validateProviders enforces that an explicitly configured overlay transport on
+// a cloud provider can actually be honored: the provider only initializes with
+// an API key, so an overlay without one would silently evaporate. runs after
+// expandEnv, so the key values here are already resolved.
+func (c *Config) validateProviders() error {
+	if c.Providers == nil {
+		return nil
+	}
+	check := func(name, apiKey, zrokToken, agoraTunnel string) error {
+		if apiKey != "" {
+			return nil
+		}
+		if agoraTunnel != "" {
+			return fmt.Errorf("providers.%s.agora_tunnel is set but providers.%s.api_key is empty", name, name)
+		}
+		if zrokToken != "" {
+			return fmt.Errorf("providers.%s.zrok_share_token is set but providers.%s.api_key is empty", name, name)
+		}
+		return nil
+	}
+	if p := c.Providers.OpenAI; p != nil {
+		if err := check("openai", p.APIKey, p.ZrokShareToken, p.AgoraTunnel); err != nil {
+			return err
+		}
+	}
+	if p := c.Providers.Anthropic; p != nil {
+		if err := check("anthropic", p.APIKey, p.ZrokShareToken, p.AgoraTunnel); err != nil {
+			return err
+		}
+	}
+	// multi-endpoint mode reads only per-endpoint transports; a top-level
+	// overlay on the local block would be silently ignored.
+	if l := c.Providers.Local; l != nil && len(l.Endpoints) > 0 {
+		if l.AgoraTunnel != "" {
+			return fmt.Errorf("providers.local.agora_tunnel is ignored in multi-endpoint mode; move it onto an endpoint")
+		}
+		if l.ZrokShareToken != "" {
+			return fmt.Errorf("providers.local.zrok_share_token is ignored in multi-endpoint mode; move it onto an endpoint")
+		}
+	}
+	return nil
 }
 
 // AgoraServeEnabled reports whether the gateway should serve its handler over
@@ -176,8 +309,9 @@ func (c *Config) validateAgora() error {
 	if c.Agora != nil && c.Agora.Serve != nil && c.Agora.Serve.Enabled && !c.Agora.Enabled {
 		return fmt.Errorf("agora.serve.enabled requires agora.enabled: true")
 	}
-	// (c) explicit publish without serve — honor the request loudly, not silently.
-	if agora.PublishExplicit(c.Agora) && !c.AgoraServeEnabled() {
+	// (c) explicit publish: true without serve — honor the request loudly, not
+	// silently. an explicit false is an opt-out and needs no serve.
+	if agora.PublishExplicit(c.Agora) && agora.AdvertisementPublish(c.Agora) && !c.AgoraServeEnabled() {
 		return fmt.Errorf("agora.advertisement.publish requires agora.serve.enabled in this iteration")
 	}
 	return nil

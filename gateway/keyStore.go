@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"path"
 	"strings"
@@ -23,19 +24,25 @@ type KeyStore struct {
 	keys map[string]*APIKeyEntry
 }
 
-// NewKeyStore builds a key lookup map from config entries.
-func NewKeyStore(entries []APIKeyEntry) *KeyStore {
+// NewKeyStore builds a key lookup map from config entries. two entries sharing
+// a key value would silently collapse — a request would authenticate as
+// whichever won, with the wrong name and permissions — so a collision is a
+// directed startup error naming the entries, never their secret.
+func NewKeyStore(entries []APIKeyEntry) (*KeyStore, error) {
 	ks := &KeyStore{
 		keys: make(map[string]*APIKeyEntry, len(entries)),
 	}
 	for i := range entries {
+		if existing, dup := ks.keys[entries[i].Key]; dup {
+			return nil, fmt.Errorf("api_keys entries '%s' and '%s' share the same key value", existing.Name, entries[i].Name)
+		}
 		ks.keys[entries[i].Key] = &entries[i]
 	}
-	return ks
+	return ks, nil
 }
 
 // Middleware returns an http.Handler that enforces bearer token authentication.
-// Requests to /health and /metrics pass through without auth.
+// requests to /health and /metrics pass through without auth.
 func (ks *KeyStore) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/health" || r.URL.Path == "/metrics" {
@@ -65,7 +72,7 @@ func (ks *KeyStore) Middleware(next http.Handler) http.Handler {
 }
 
 // KeyFromContext retrieves the API key entry from the request context.
-// Returns nil when authentication is disabled or the request was not authenticated.
+// returns nil when authentication is disabled or the request was not authenticated.
 func KeyFromContext(ctx context.Context) *APIKeyEntry {
 	entry, _ := ctx.Value(apiKeyContextKey).(*APIKeyEntry)
 	return entry

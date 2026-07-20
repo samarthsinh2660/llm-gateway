@@ -16,7 +16,7 @@ func newGenkeyCommand() *genkeyCommand {
 	gc := &genkeyCommand{}
 	gc.cmd = &cobra.Command{
 		Use:   "genkey",
-		Short: "Generate a new gateway API key",
+		Short: "generate a new gateway API key",
 		RunE:  gc.genkey,
 	}
 	return gc

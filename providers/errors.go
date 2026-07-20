@@ -87,6 +87,26 @@ func WriteError(w http.ResponseWriter, err *APIError, statusCode int) {
 	json.NewEncoder(w).Encode(ErrorResponse{Error: *err})
 }
 
+// HandleNotFound is a mux fallback that answers unknown paths with an
+// OpenAI-shaped 404 instead of net/http's plain text.
+func HandleNotFound(w http.ResponseWriter, r *http.Request) {
+	WriteError(w,
+		NewAPIError(fmt.Sprintf("unknown path '%s'", r.URL.Path), ErrorTypeNotFound),
+		http.StatusNotFound,
+	)
+}
+
+// HandleMethodNotAllowed is a mux fallback for method-less patterns that
+// answers unsupported methods with an OpenAI-shaped 405 instead of net/http's
+// plain text. The explicit 405 matches OpenAI's own contract for method
+// mismatches; StatusCodeForError stays the default mapping elsewhere.
+func HandleMethodNotAllowed(w http.ResponseWriter, r *http.Request) {
+	WriteError(w,
+		NewAPIError(fmt.Sprintf("method %s is not allowed for '%s'", r.Method, r.URL.Path), ErrorTypeInvalidRequest),
+		http.StatusMethodNotAllowed,
+	)
+}
+
 // StatusCodeForError returns the appropriate HTTP status code for an error type.
 func StatusCodeForError(errType string) int {
 	switch errType {

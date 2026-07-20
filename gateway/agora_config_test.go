@@ -62,6 +62,18 @@ func TestValidateAgoraExplicitPublishRequiresServe(t *testing.T) {
 	if err := cfg.validateAgora(); err != nil {
 		t.Fatalf("unexpected error with serve enabled: %v", err)
 	}
+
+	// an explicit publish:false is an opt-out, not a request — no serve needed.
+	noPublish := false
+	cfg = &Config{
+		Agora: &agora.Config{
+			Enabled:       true,
+			Advertisement: &agora.AdvertisementConfig{Publish: &noPublish},
+		},
+	}
+	if err := cfg.validateAgora(); err != nil {
+		t.Fatalf("explicit publish:false without serve must validate, got %v", err)
+	}
 }
 
 func TestCollectAgoraTunnelsScoping(t *testing.T) {

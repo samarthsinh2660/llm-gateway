@@ -32,9 +32,14 @@ func NewShare(mode string) (*Share, error) {
 		return nil, fmt.Errorf("zrok environment is not enabled; run 'zrok enable' first")
 	}
 
-	shareMode := sdk.PrivateShareMode
-	if mode == "public" {
+	var shareMode sdk.ShareMode
+	switch mode {
+	case "", "private":
+		shareMode = sdk.PrivateShareMode
+	case "public":
 		shareMode = sdk.PublicShareMode
+	default:
+		return nil, fmt.Errorf("unknown zrok share mode '%s' (expected 'public' or 'private')", mode)
 	}
 
 	dl.Infof("creating zrok %s share", shareMode)
@@ -72,8 +77,8 @@ func NewShare(mode string) (*Share, error) {
 }
 
 // NewShareFromToken creates a Share from an existing persistent share token.
-// Persistent shares are private shares that persist across restarts.
-// The share won't be deleted on Close since it's managed externally.
+// persistent shares are private shares that persist across restarts; the share
+// won't be deleted on Close since it's managed externally.
 func NewShareFromToken(token string) (*Share, error) {
 	root, err := environment.LoadRoot()
 	if err != nil {
@@ -113,7 +118,7 @@ func (s *Share) Listener() net.Listener {
 }
 
 // Close terminates the share and cleans up resources.
-// For persistent shares, only the listener is closed (the share is managed externally).
+// for persistent shares, only the listener is closed (the share is managed externally).
 func (s *Share) Close() error {
 	var lastErr error
 

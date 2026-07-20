@@ -46,36 +46,76 @@ func ResolveConfig(cfg *Config) error {
 		return nil
 	}
 
-	expandStrings(cfg)
+	if err := expandStrings(cfg); err != nil {
+		return err
+	}
 	if cfg.IntegrationFile != "" {
 		file, err := loadIntegrationFile(cfg.IntegrationFile)
 		if err != nil {
 			return err
 		}
 		mergeIntegrationFile(cfg, file)
-		expandStrings(cfg)
+		if err := expandStrings(cfg); err != nil {
+			return err
+		}
 	}
 
 	return nil
 }
 
-func expandStrings(cfg *Config) {
-	cfg.IntegrationFile = os.ExpandEnv(cfg.IntegrationFile)
-	cfg.APIEndpoint = os.ExpandEnv(cfg.APIEndpoint)
-	cfg.EnvRoot = os.ExpandEnv(cfg.EnvRoot)
-	cfg.InstanceName = os.ExpandEnv(cfg.InstanceName)
-	cfg.Description = os.ExpandEnv(cfg.Description)
+// expandStrings resolves ${VAR} references in the config's string fields. a
+// value written non-empty that resolves empty is a directed error — silently
+// blanking it would hand the field to a default the operator did not choose.
+func expandStrings(cfg *Config) error {
+	expand := func(field string, value *string) error {
+		if *value == "" {
+			return nil
+		}
+		expanded := os.ExpandEnv(*value)
+		if expanded == "" {
+			return fmt.Errorf("agora.%s resolves empty (unset environment variable?)", field)
+		}
+		*value = expanded
+		return nil
+	}
+
+	if err := expand("integration_file", &cfg.IntegrationFile); err != nil {
+		return err
+	}
+	if err := expand("api_endpoint", &cfg.APIEndpoint); err != nil {
+		return err
+	}
+	if err := expand("env_root", &cfg.EnvRoot); err != nil {
+		return err
+	}
+	if err := expand("instance_name", &cfg.InstanceName); err != nil {
+		return err
+	}
+	if err := expand("description", &cfg.Description); err != nil {
+		return err
+	}
 
 	if cfg.Advertisement != nil {
-		cfg.Advertisement.ContractID = os.ExpandEnv(cfg.Advertisement.ContractID)
+		if err := expand("advertisement.contract_id", &cfg.Advertisement.ContractID); err != nil {
+			return err
+		}
 		for i := range cfg.Advertisement.WorkgroupIDs {
-			cfg.Advertisement.WorkgroupIDs[i] = os.ExpandEnv(cfg.Advertisement.WorkgroupIDs[i])
+			field := fmt.Sprintf("advertisement.workgroup_ids[%d]", i)
+			if err := expand(field, &cfg.Advertisement.WorkgroupIDs[i]); err != nil {
+				return err
+			}
 		}
 		for i := range cfg.Advertisement.Capabilities {
-			cfg.Advertisement.Capabilities[i] = os.ExpandEnv(cfg.Advertisement.Capabilities[i])
+			field := fmt.Sprintf("advertisement.capabilities[%d]", i)
+			if err := expand(field, &cfg.Advertisement.Capabilities[i]); err != nil {
+				return err
+			}
 		}
 	}
 	if cfg.Serve != nil {
-		cfg.Serve.Tunnel = os.ExpandEnv(cfg.Serve.Tunnel)
+		if err := expand("serve.tunnel", &cfg.Serve.Tunnel); err != nil {
+			return err
+		}
 	}
+	return nil
 }

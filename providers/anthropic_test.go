@@ -168,8 +168,8 @@ func TestAnthropicTranslateResponse(t *testing.T) {
 	}
 
 	choice := result.Choices[0]
-	if choice.FinishReason != "stop" {
-		t.Errorf("FinishReason = %q, want %q", choice.FinishReason, "stop")
+	if choice.FinishReason == nil || *choice.FinishReason != "stop" {
+		t.Errorf("FinishReason = %v, want %q", choice.FinishReason, "stop")
 	}
 	if choice.Message == nil {
 		t.Fatal("Message is nil")
@@ -498,8 +498,8 @@ func TestAnthropicTranslateResponseToolUse(t *testing.T) {
 		}
 		result := a.translateResponse(resp, "claude-sonnet-4-6")
 		choice := result.Choices[0]
-		if choice.FinishReason != "tool_calls" {
-			t.Errorf("FinishReason = %q, want tool_calls", choice.FinishReason)
+		if choice.FinishReason == nil || *choice.FinishReason != "tool_calls" {
+			t.Errorf("FinishReason = %v, want tool_calls", choice.FinishReason)
 		}
 		if choice.Message.Content != nil {
 			t.Errorf("Content = %v, want nil", choice.Message.Content)
@@ -621,8 +621,45 @@ func TestAnthropicStreamToolCalls(t *testing.T) {
 	}
 
 	// final chunk carries finish_reason
-	if fr := chunks[3].Choices[0].FinishReason; fr != "tool_calls" {
-		t.Errorf("final FinishReason = %q, want tool_calls", fr)
+	if fr := chunks[3].Choices[0].FinishReason; fr == nil || *fr != "tool_calls" {
+		t.Errorf("final FinishReason = %v, want tool_calls", fr)
+	}
+}
+
+func TestAnthropicStreamErrorEvent(t *testing.T) {
+	a := NewAnthropic("test-key", "")
+
+	sse := strings.Join([]string{
+		`data: {"type":"message_start","message":{"id":"msg_1"}}`,
+		``,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}`,
+		``,
+		`data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`,
+		``,
+	}, "\n")
+
+	events := make(chan StreamEvent, 10)
+	go a.readSSEStream(io.NopCloser(strings.NewReader(sse)), events, "claude-sonnet-4-6")
+
+	var streamErr error
+	var done bool
+	for ev := range events {
+		if ev.Err != nil {
+			streamErr = ev.Err
+		}
+		if ev.Done {
+			done = true
+		}
+	}
+
+	if streamErr == nil {
+		t.Fatal("mid-stream error event must surface as a stream error")
+	}
+	if !strings.Contains(streamErr.Error(), "Overloaded") {
+		t.Errorf("stream error = %q, want the upstream message", streamErr)
+	}
+	if done {
+		t.Error("an errored stream must not also emit Done")
 	}
 }
 

@@ -6,6 +6,24 @@ import (
 	"net/http"
 )
 
+// parseStreamChunk parses one SSE data payload from an OpenAI-compatible stream.
+// an error envelope ({"error": {...}}) is returned as an error rather than
+// silently decoded into an all-zero chunk, so an upstream mid-stream failure
+// surfaces to the client instead of arriving as an empty delta.
+func parseStreamChunk(data string) (*StreamChunk, error) {
+	var probe struct {
+		Error *APIError `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(data), &probe); err == nil && probe.Error != nil {
+		return nil, probe.Error
+	}
+	var chunk StreamChunk
+	if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+		return nil, fmt.Errorf("failed to parse chunk: %w", err)
+	}
+	return &chunk, nil
+}
+
 // SSEWriter provides utilities for writing Server-Sent Events.
 type SSEWriter struct {
 	w       http.ResponseWriter
@@ -13,7 +31,7 @@ type SSEWriter struct {
 }
 
 // NewSSEWriter creates an SSEWriter for the given ResponseWriter.
-// Returns nil if the ResponseWriter doesn't support flushing.
+// returns nil if the ResponseWriter doesn't support flushing.
 func NewSSEWriter(w http.ResponseWriter) *SSEWriter {
 	flusher, ok := w.(http.Flusher)
 	if !ok {

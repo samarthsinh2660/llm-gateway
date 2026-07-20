@@ -10,7 +10,7 @@ type Provider interface {
 	ChatCompletion(ctx context.Context, req *ChatCompletionRequest) (*ChatCompletionResponse, error)
 
 	// ChatCompletionStream sends a streaming chat completion request.
-	// Returns a channel that receives chunks and closes when complete.
+	// returns a channel that receives chunks and closes when complete.
 	ChatCompletionStream(ctx context.Context, req *ChatCompletionRequest) (<-chan StreamEvent, error)
 
 	// ListModels returns the list of available models from this provider.

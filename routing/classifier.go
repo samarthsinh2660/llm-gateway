@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/openziti/llm-gateway/providers"
 )
 
 // classifiedResult holds a cached classification outcome.
@@ -95,9 +97,9 @@ func (cm *ClassifierMatcher) Classify(ctx context.Context, info *RequestInfo) (s
 
 	prompt := cm.buildPrompt(info)
 
-	reqBody := classifierChatRequest{
+	reqBody := providers.ChatCompletionRequest{
 		Model: cm.cfg.Model,
-		Messages: []classifierMessage{
+		Messages: []providers.Message{
 			{Role: "user", Content: prompt},
 		},
 	}
@@ -133,16 +135,21 @@ func (cm *ClassifierMatcher) Classify(ctx context.Context, info *RequestInfo) (s
 	}
 
 	// parse the chat completion response
-	var chatResp classifierChatResponse
+	var chatResp providers.ChatCompletionResponse
 	if err := json.Unmarshal(respBody, &chatResp); err != nil {
 		return "", 0, fmt.Errorf("failed to unmarshal classifier response: %w", err)
 	}
 
-	if len(chatResp.Choices) == 0 {
+	if len(chatResp.Choices) == 0 || chatResp.Choices[0].Message == nil {
 		return "", 0, fmt.Errorf("classifier returned no choices")
 	}
 
-	content := chatResp.Choices[0].Message.Content
+	// the classifier prompt asks for a plain-text JSON reply, so content is a
+	// string; anything else is an unusable response.
+	content, ok := chatResp.Choices[0].Message.Content.(string)
+	if !ok {
+		return "", 0, fmt.Errorf("classifier returned non-text content")
+	}
 
 	// extract JSON from the response (may be wrapped in markdown code blocks)
 	content = extractJSON(content)
@@ -196,22 +203,3 @@ func extractJSON(s string) string {
 	return s
 }
 
-// classifier-specific request/response types (minimal, only what we need)
-
-type classifierChatRequest struct {
-	Model    string              `json:"model"`
-	Messages []classifierMessage `json:"messages"`
-}
-
-type classifierMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-type classifierChatResponse struct {
-	Choices []classifierChoice `json:"choices"`
-}
-
-type classifierChoice struct {
-	Message classifierMessage `json:"message"`
-}

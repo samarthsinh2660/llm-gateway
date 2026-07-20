@@ -15,7 +15,7 @@ func newVersionCommand() *versionCommand {
 	vc := &versionCommand{}
 	vc.cmd = &cobra.Command{
 		Use:   "version",
-		Short: "Show the llm-gateway version",
+		Short: "show the llm-gateway version",
 		Run:   vc.version,
 	}
 	return vc

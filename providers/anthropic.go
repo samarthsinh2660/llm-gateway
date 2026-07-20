@@ -10,10 +10,12 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/michaelquigley/df/dl"
 )
 
 // Anthropic implements the Provider interface for Anthropic's API.
-// It translates OpenAI-format requests to Anthropic's format.
+// it translates OpenAI-format requests to Anthropic's format.
 type Anthropic struct {
 	apiKey  string
 	baseURL string
@@ -95,12 +97,20 @@ type anthropicUsage struct {
 
 // anthropic streaming event types
 type anthropicStreamEvent struct {
-	Type         string                  `json:"type"`
-	Index        int                     `json:"index,omitempty"`
-	ContentBlock *anthropicContentBlock  `json:"content_block,omitempty"`
-	Delta        *anthropicDelta         `json:"delta,omitempty"`
-	Message      *anthropicResponse      `json:"message,omitempty"`
-	Usage        *anthropicStreamUsage   `json:"usage,omitempty"`
+	Type         string                 `json:"type"`
+	Index        int                    `json:"index,omitempty"`
+	ContentBlock *anthropicContentBlock `json:"content_block,omitempty"`
+	Delta        *anthropicDelta        `json:"delta,omitempty"`
+	Message      *anthropicResponse     `json:"message,omitempty"`
+	Usage        *anthropicStreamUsage  `json:"usage,omitempty"`
+	Error        *anthropicStreamError  `json:"error,omitempty"`
+}
+
+// anthropicStreamError is the payload of a streaming `type: "error"` event
+// (e.g. overloaded_error, rate_limit_error mid-stream).
+type anthropicStreamError struct {
+	Type    string `json:"type"`
+	Message string `json:"message"`
 }
 
 type anthropicDelta struct {
@@ -301,6 +311,7 @@ func (a *Anthropic) readSSEStream(body io.ReadCloser, events chan<- StreamEvent,
 
 		case "message_delta":
 			if event.Delta != nil && event.Delta.StopReason != "" {
+				finishReason := a.translateStopReason(event.Delta.StopReason)
 				chunk := &StreamChunk{
 					ID:      messageID,
 					Object:  "chat.completion.chunk",
@@ -310,12 +321,22 @@ func (a *Anthropic) readSSEStream(body io.ReadCloser, events chan<- StreamEvent,
 						{
 							Index:        0,
 							Delta:        &Delta{},
-							FinishReason: a.translateStopReason(event.Delta.StopReason),
+							FinishReason: &finishReason,
 						},
 					},
 				}
 				events <- StreamEvent{Chunk: chunk}
 			}
+
+		case "error":
+			// surface a mid-stream upstream error as a stream error event so the
+			// handler writes the OpenAI-shaped SSE error and closes cleanly.
+			msg := "anthropic stream error"
+			if event.Error != nil && event.Error.Message != "" {
+				msg = fmt.Sprintf("anthropic stream error: %s", event.Error.Message)
+			}
+			events <- StreamEvent{Err: fmt.Errorf("%s", msg)}
+			return
 
 		case "message_stop":
 			events <- StreamEvent{Done: true}
@@ -488,7 +509,7 @@ func isEmptySchema(schema any) bool {
 }
 
 // translateToolChoice maps OpenAI tool_choice to anthropic's tool_choice object.
-// It returns dropTools=true for "none", signalling that tools should be omitted
+// it returns dropTools=true for "none", signalling that tools should be omitted
 // from the request (anthropic has no direct "none" equivalent).
 func (a *Anthropic) translateToolChoice(tc any) (choice *anthropicToolChoice, dropTools bool) {
 	switch v := tc.(type) {
@@ -571,6 +592,7 @@ func (a *Anthropic) translateResponse(resp *anthropicResponse, model string) *Ch
 		msg.Content = content.String()
 	}
 
+	finishReason := a.translateStopReason(resp.StopReason)
 	return &ChatCompletionResponse{
 		ID:      resp.ID,
 		Object:  "chat.completion",
@@ -580,7 +602,7 @@ func (a *Anthropic) translateResponse(resp *anthropicResponse, model string) *Ch
 			{
 				Index:        0,
 				Message:      msg,
-				FinishReason: a.translateStopReason(resp.StopReason),
+				FinishReason: &finishReason,
 			},
 		},
 		Usage: &Usage{
@@ -636,6 +658,9 @@ func (a *Anthropic) parseError(statusCode int, body []byte) error {
 	case http.StatusNotFound:
 		return NewAPIError("resource not found", ErrorTypeNotFound)
 	default:
-		return NewAPIError(fmt.Sprintf("Anthropic API error: %s", string(body)), ErrorTypeServer)
+		// keep the native upstream body out of the client-facing error; log it
+		// for diagnostics and return a generic OpenAI-shaped server error.
+		dl.Errorf("anthropic API error (status %d): %s", statusCode, string(body))
+		return NewAPIError(fmt.Sprintf("Anthropic API error (status %d)", statusCode), ErrorTypeServer)
 	}
 }

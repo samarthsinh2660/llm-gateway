@@ -137,13 +137,13 @@ func (o *OpenAI) readSSEStream(body io.ReadCloser, events chan<- StreamEvent) {
 			return
 		}
 
-		var chunk StreamChunk
-		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			events <- StreamEvent{Err: fmt.Errorf("failed to parse chunk: %w", err)}
+		chunk, err := parseStreamChunk(data)
+		if err != nil {
+			events <- StreamEvent{Err: err}
 			return
 		}
 
-		events <- StreamEvent{Chunk: &chunk}
+		events <- StreamEvent{Chunk: chunk}
 	}
 
 	if err := scanner.Err(); err != nil {

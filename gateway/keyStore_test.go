@@ -4,13 +4,25 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/openziti/llm-gateway/providers"
 )
 
+// mustKeyStore builds a KeyStore for tests that need a store rather than to
+// exercise construction errors.
+func mustKeyStore(t *testing.T, entries []APIKeyEntry) *KeyStore {
+	t.Helper()
+	ks, err := NewKeyStore(entries)
+	if err != nil {
+		t.Fatalf("NewKeyStore() = %v, want nil", err)
+	}
+	return ks
+}
+
 func TestKeyStoreLookup(t *testing.T) {
-	ks := NewKeyStore([]APIKeyEntry{
+	ks := mustKeyStore(t, []APIKeyEntry{
 		{Name: "alice", Key: "sk-gw-aaa"},
 		{Name: "bob", Key: "sk-gw-bbb"},
 	})
@@ -23,6 +35,19 @@ func TestKeyStoreLookup(t *testing.T) {
 	}
 	if _, ok := ks.keys["sk-gw-ccc"]; ok {
 		t.Fatal("expected unknown key to be absent")
+	}
+}
+
+func TestKeyStoreDuplicateKeyRejected(t *testing.T) {
+	_, err := NewKeyStore([]APIKeyEntry{
+		{Name: "alice", Key: "sk-gw-shared"},
+		{Name: "bob", Key: "sk-gw-shared"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "'alice' and 'bob'") {
+		t.Fatalf("NewKeyStore() = %v, want a duplicate-key error naming both entries", err)
+	}
+	if err != nil && strings.Contains(err.Error(), "sk-gw-shared") {
+		t.Error("duplicate-key error must not expose the secret value")
 	}
 }
 
@@ -74,7 +99,7 @@ func TestCheckRoute(t *testing.T) {
 }
 
 func TestMiddlewarePassthroughHealth(t *testing.T) {
-	ks := NewKeyStore([]APIKeyEntry{{Name: "test", Key: "sk-gw-test"}})
+	ks := mustKeyStore(t, []APIKeyEntry{{Name: "test", Key: "sk-gw-test"}})
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -100,7 +125,7 @@ func TestMiddlewarePassthroughHealth(t *testing.T) {
 }
 
 func TestMiddlewareMissingHeader(t *testing.T) {
-	ks := NewKeyStore([]APIKeyEntry{{Name: "test", Key: "sk-gw-test"}})
+	ks := mustKeyStore(t, []APIKeyEntry{{Name: "test", Key: "sk-gw-test"}})
 	handler := ks.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Fatal("handler should not be called")
 	}))
@@ -121,7 +146,7 @@ func TestMiddlewareMissingHeader(t *testing.T) {
 }
 
 func TestMiddlewareInvalidKey(t *testing.T) {
-	ks := NewKeyStore([]APIKeyEntry{{Name: "test", Key: "sk-gw-test"}})
+	ks := mustKeyStore(t, []APIKeyEntry{{Name: "test", Key: "sk-gw-test"}})
 	handler := ks.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Fatal("handler should not be called")
 	}))
@@ -137,7 +162,7 @@ func TestMiddlewareInvalidKey(t *testing.T) {
 }
 
 func TestMiddlewareValidKey(t *testing.T) {
-	ks := NewKeyStore([]APIKeyEntry{{Name: "alice", Key: "sk-gw-alice"}})
+	ks := mustKeyStore(t, []APIKeyEntry{{Name: "alice", Key: "sk-gw-alice"}})
 
 	var gotEntry *APIKeyEntry
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

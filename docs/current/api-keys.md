@@ -49,19 +49,16 @@ Keys are stored as plaintext in the config file, consistent with how upstream AP
 
 ## Authentication Flow
 
-```
-Client request
-    |
-    v
-Auth middleware
-    |-- /health, /metrics -> pass through (no auth required)
-    |-- api_keys disabled -> pass through
-    |-- Authorization header missing -> 401
-    |-- Key not recognized -> 401
-    |-- Key valid -> attach identity to context, continue
-    |
-    v
-Existing handler pipeline (unchanged)
+```mermaid
+flowchart TD
+    req[client request] --> mw{auth middleware}
+    mw -- "/health, /metrics" --> pass[pass through — no auth required]
+    mw -- "api_keys disabled" --> pass
+    mw -- "Authorization header missing" --> e401[401]
+    mw -- "key not recognized" --> e401
+    mw -- "key valid" --> ok[attach identity to context]
+    pass --> handlers[existing handler pipeline — unchanged]
+    ok --> handlers
 ```
 
 ## Model Restrictions

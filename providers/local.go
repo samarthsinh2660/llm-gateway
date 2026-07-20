@@ -12,7 +12,7 @@ import (
 )
 
 // Local implements the Provider interface for any OpenAI-compatible backend.
-// It can connect via HTTP or through a zrok share.
+// it can connect via HTTP or through a zrok share.
 type Local struct {
 	baseURL string
 	client  *http.Client
@@ -30,7 +30,7 @@ func NewLocal(baseURL string) *Local {
 }
 
 // NewLocalWithClient creates a new local provider with a custom HTTP client.
-// Use this for zrok-based connections.
+// use this for zrok-based connections.
 func NewLocalWithClient(baseURL string, client *http.Client) *Local {
 	if baseURL == "" {
 		baseURL = "http://localhost:11434"
@@ -133,13 +133,13 @@ func (l *Local) readSSEStream(body io.ReadCloser, events chan<- StreamEvent) {
 			return
 		}
 
-		var chunk StreamChunk
-		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			events <- StreamEvent{Err: fmt.Errorf("failed to parse chunk: %w", err)}
+		chunk, err := parseStreamChunk(data)
+		if err != nil {
+			events <- StreamEvent{Err: err}
 			return
 		}
 
-		events <- StreamEvent{Chunk: &chunk}
+		events <- StreamEvent{Chunk: chunk}
 	}
 
 	if err := scanner.Err(); err != nil {

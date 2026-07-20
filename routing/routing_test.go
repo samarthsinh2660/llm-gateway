@@ -2,6 +2,7 @@ package routing
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -62,6 +63,68 @@ func TestSemanticRouterExplicitModelDisallowed(t *testing.T) {
 	// should not use explicit method since it's disallowed
 	if decision.Method == MethodExplicit {
 		t.Error("explicit model should be disallowed")
+	}
+}
+
+func TestSemanticRouterRejectsUnknownRouteRefs(t *testing.T) {
+	// a default_route that resolves to no route is a phantom fallback.
+	cfg := &RoutingConfig{
+		DefaultRoute: "genral",
+		Routes:       []RouteConfig{{Name: "general", Model: "gpt-4"}},
+	}
+	if _, err := NewSemanticRouter(context.Background(), cfg, nil); err == nil ||
+		!strings.Contains(err.Error(), "default_route references unknown route 'genral'") {
+		t.Fatalf("NewSemanticRouter() = %v, want unknown default_route error", err)
+	}
+
+	// a matching layer enabled with no routes can never decide.
+	cfg = &RoutingConfig{
+		Classifier: &ClassifierConfig{Enabled: true},
+	}
+	if _, err := NewSemanticRouter(context.Background(), cfg, nil); err == nil ||
+		!strings.Contains(err.Error(), "routing.classifier.enabled requires at least one route") {
+		t.Fatalf("NewSemanticRouter() = %v, want classifier-without-routes error", err)
+	}
+	cfg = &RoutingConfig{
+		Semantic: &SemanticConfig{Enabled: true},
+	}
+	if _, err := NewSemanticRouter(context.Background(), cfg, nil); err == nil ||
+		!strings.Contains(err.Error(), "routing.semantic.enabled requires at least one route") {
+		t.Fatalf("NewSemanticRouter() = %v, want semantic-without-routes error", err)
+	}
+
+	// an unnamed route is unaddressable and unauthorizable.
+	cfg = &RoutingConfig{
+		Routes: []RouteConfig{{Name: "", Model: "llama3"}},
+	}
+	if _, err := NewSemanticRouter(context.Background(), cfg, nil); err == nil ||
+		!strings.Contains(err.Error(), "route 0 has an empty name") {
+		t.Fatalf("NewSemanticRouter() = %v, want empty route name error", err)
+	}
+
+	// a route with an empty model cannot be dispatched; refuse it at
+	// construction so a selected route always yields a model.
+	cfg = &RoutingConfig{
+		Routes: []RouteConfig{{Name: "coding", Model: ""}},
+	}
+	if _, err := NewSemanticRouter(context.Background(), cfg, nil); err == nil ||
+		!strings.Contains(err.Error(), "route 0 ('coding') has an empty model") {
+		t.Fatalf("NewSemanticRouter() = %v, want empty model error", err)
+	}
+
+	// a heuristic rule targeting a nonexistent route is permanently dead.
+	cfg = &RoutingConfig{
+		Heuristics: &HeuristicsConfig{
+			Enabled: true,
+			Rules: []HeuristicRule{
+				{Match: MatchCondition{Keywords: []string{"translate"}}, Route: "codng"},
+			},
+		},
+		Routes: []RouteConfig{{Name: "coding", Model: "llama3"}},
+	}
+	if _, err := NewSemanticRouter(context.Background(), cfg, nil); err == nil ||
+		!strings.Contains(err.Error(), "heuristic rule 0 references unknown route 'codng'") {
+		t.Fatalf("NewSemanticRouter() = %v, want unknown heuristic route error", err)
 	}
 }
 

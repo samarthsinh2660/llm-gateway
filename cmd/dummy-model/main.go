@@ -31,9 +31,9 @@ func newRootCommand() *rootCommand {
 	rc := &rootCommand{}
 	rc.cmd = &cobra.Command{
 		Use:   "dummy-model",
-		Short: "Fake OpenAI-compatible backend for testing and demos",
+		Short: "fake OpenAI-compatible backend for testing and demos",
 		Long: "dummy-model serves an OpenAI-compatible endpoint backed by a fake model.\n" +
-			"It performs no real inference and returns deterministic responses, so it can\n" +
+			"it performs no real inference and returns deterministic responses, so it can\n" +
 			"stand in as the gateway's local backend for tests and demos.",
 		RunE: rc.run,
 	}

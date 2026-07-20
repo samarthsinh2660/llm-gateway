@@ -48,6 +48,13 @@ func (s *server) handler() http.Handler {
 	mux.HandleFunc("GET /v1/models", s.handleModels)
 	mux.HandleFunc("POST /v1/chat/completions", s.handleChatCompletions)
 	mux.HandleFunc("GET /health", s.handleHealth)
+
+	// keep the error surface OpenAI-shaped like the gateway's: no plain-text
+	// 404/405 from the mux.
+	mux.HandleFunc("/", providers.HandleNotFound)
+	for _, path := range []string{"/v1/models", "/v1/chat/completions", "/health"} {
+		mux.HandleFunc(path, providers.HandleMethodNotAllowed)
+	}
 	return mux
 }
 
@@ -121,7 +128,7 @@ func (s *server) respondText(w http.ResponseWriter, req *providers.ChatCompletio
 			Choices: []providers.Choice{{
 				Index:        0,
 				Message:      &providers.Message{Role: "assistant", Content: reply},
-				FinishReason: "stop",
+				FinishReason: strPtr("stop"),
 			}},
 			Usage: &providers.Usage{
 				PromptTokens:     promptTokens,
@@ -179,7 +186,7 @@ func (s *server) respondToolCall(w http.ResponseWriter, req *providers.ChatCompl
 						Function: providers.FunctionCall{Name: fnName, Arguments: args},
 					}},
 				},
-				FinishReason: "tool_calls",
+				FinishReason: strPtr("tool_calls"),
 			}},
 			Usage: &providers.Usage{
 				PromptTokens:     promptTokens,
@@ -223,6 +230,11 @@ func (s *server) respondToolCall(w http.ResponseWriter, req *providers.ChatCompl
 }
 
 func (s *server) writeChunk(sse *providers.SSEWriter, id string, created int64, model string, delta providers.Delta, finish string) {
+	// empty finish reason means an intermediate chunk: emit null, not a value.
+	var finishReason *string
+	if finish != "" {
+		finishReason = &finish
+	}
 	sse.WriteChunk(&providers.StreamChunk{
 		ID:      id,
 		Object:  "chat.completion.chunk",
@@ -231,10 +243,12 @@ func (s *server) writeChunk(sse *providers.SSEWriter, id string, created int64, 
 		Choices: []providers.Choice{{
 			Index:        0,
 			Delta:        &delta,
-			FinishReason: finish,
+			FinishReason: finishReason,
 		}},
 	})
 }
+
+func strPtr(s string) *string { return &s }
 
 // replyText returns the canned response when configured, otherwise echoes the
 // last user message.

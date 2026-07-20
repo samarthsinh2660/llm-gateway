@@ -26,7 +26,6 @@ type SubsystemOptions struct {
 	Config        *Config
 	Defaults      Defaults
 	Capabilities  []string
-	ServeWanted   bool
 	PublishWanted bool
 }
 
@@ -37,7 +36,6 @@ type Subsystem struct {
 	cfg           *Config
 	identity      Identity
 	capabilities  []string
-	serveWanted   bool
 	publishWanted bool
 	ops           agoraOps
 	agent         any
@@ -139,7 +137,6 @@ func newSubsystemWithOps(opts SubsystemOptions, ops agoraOps) (*Subsystem, error
 		return nil, err
 	}
 
-	serveWanted := opts.ServeWanted && ServeEnabled(cfg)
 	publishWanted := opts.PublishWanted && AdvertisementPublish(cfg)
 
 	// publishing requires workgroup scope IDs (controller-enforced). When
@@ -177,7 +174,6 @@ func newSubsystemWithOps(opts SubsystemOptions, ops agoraOps) (*Subsystem, error
 		cfg:           cfg,
 		identity:      identity,
 		capabilities:  append([]string(nil), capabilities...),
-		serveWanted:   serveWanted,
 		publishWanted: publishWanted,
 		ops:           ops,
 		agent:         handle,

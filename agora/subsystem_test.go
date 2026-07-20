@@ -214,7 +214,6 @@ func TestSubsystemDefaultPublishWithoutWorkgroupsDowngradesToServeOnly(t *testin
 		Config:        cfg,
 		Defaults:      gatewayDefaults(),
 		Capabilities:  []string{"llm-routing"},
-		ServeWanted:   true,
 		PublishWanted: true,
 	}, ops)
 	if err != nil {
@@ -305,7 +304,6 @@ func TestSubsystemCloseOrder(t *testing.T) {
 		Config:        cfg,
 		Defaults:      gatewayDefaults(),
 		Capabilities:  []string{"llm-routing"},
-		ServeWanted:   true,
 		PublishWanted: true,
 	}, ops)
 	if err != nil {
@@ -371,7 +369,6 @@ func newTestSubsystem(t *testing.T, configure func(*Config)) (*Subsystem, *fakeO
 		Config:       cfg,
 		Defaults:     gatewayDefaults(),
 		Capabilities: []string{"llm-routing"},
-		ServeWanted:  ServeEnabled(cfg),
 	}, ops)
 	if err != nil {
 		t.Fatalf("newSubsystemWithOps returned error: %v", err)

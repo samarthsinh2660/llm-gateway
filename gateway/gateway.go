@@ -19,18 +19,19 @@ import (
 )
 
 type Gateway struct {
-	cfg             *Config
-	providers       map[providers.ProviderType]providers.Provider
-	router          *providers.Router
-	semanticRouter  *routing.SemanticRouter
-	keyStore        *KeyStore
-	share           *Share
-	accesses        []*Access
-	localHTTPClient *http.Client
-	agora           *agora.Subsystem
-	agoraDial       func(string) (*http.Client, error)
-	meters          *meters
-	metricsHandler  http.Handler
+	cfg              *Config
+	providers        map[providers.ProviderType]providers.Provider
+	router           *providers.Router
+	semanticRouter   *routing.SemanticRouter
+	keyStore         *KeyStore
+	share            *Share
+	accesses         []*Access
+	localHTTPClient  *http.Client
+	openaiHTTPClient *http.Client
+	agora            *agora.Subsystem
+	agoraDial        func(string) (*http.Client, error)
+	meters           *meters
+	metricsHandler   http.Handler
 }
 
 func New(cfg *Config) (_ *Gateway, err error) {
@@ -45,7 +46,7 @@ func New(cfg *Config) (_ *Gateway, err error) {
 	}()
 
 	// bring up the agora subsystem before providers — provider wiring needs the
-	// per-tunnel dial clients. Any failure here is fatal at boot (iteration 1).
+	// per-tunnel dial clients. any failure here is fatal at boot (iteration 1).
 	if cfg.Agora != nil && cfg.Agora.Enabled {
 		sub, serr := agora.NewSubsystem(agora.SubsystemOptions{
 			Config: cfg.Agora,
@@ -55,7 +56,6 @@ func New(cfg *Config) (_ *Gateway, err error) {
 				AgentNamePrefix: "llm-gateway",
 			},
 			Capabilities:  agora.Derive([]string{"llm-routing"}, capabilityExtras(cfg)),
-			ServeWanted:   cfg.AgoraServeEnabled(),
 			PublishWanted: cfg.AgoraPublishEnabled(),
 		})
 		if serr != nil {
@@ -91,8 +91,16 @@ func New(cfg *Config) (_ *Gateway, err error) {
 		dl.Info("initialized opentelemetry metrics")
 	}
 
-	if cfg.APIKeys != nil && cfg.APIKeys.Enabled && len(cfg.APIKeys.Keys) > 0 {
-		g.keyStore = NewKeyStore(cfg.APIKeys.Keys)
+	if cfg.APIKeys != nil && cfg.APIKeys.Enabled {
+		// enabled with no keys must not silently mean open access.
+		if len(cfg.APIKeys.Keys) == 0 {
+			return nil, fmt.Errorf("api_keys.enabled requires at least one configured key")
+		}
+		ks, err := NewKeyStore(cfg.APIKeys.Keys)
+		if err != nil {
+			return nil, err
+		}
+		g.keyStore = ks
 		dl.Infof("loaded %d API key(s)", len(cfg.APIKeys.Keys))
 	}
 
@@ -112,19 +120,22 @@ func (g *Gateway) initProviders() error {
 		return nil
 	}
 
-	// initialize openai provider
+	// initialize openai provider. secrets are expanded once at config load.
 	if g.cfg.Providers.OpenAI != nil && g.cfg.Providers.OpenAI.APIKey != "" {
-		apiKey := os.ExpandEnv(g.cfg.Providers.OpenAI.APIKey)
-		baseURL := os.ExpandEnv(g.cfg.Providers.OpenAI.BaseURL)
+		apiKey := g.cfg.Providers.OpenAI.APIKey
+		baseURL := g.cfg.Providers.OpenAI.BaseURL
 
 		if g.cfg.Providers.OpenAI.AgoraTunnel != "" {
 			// agora wins over zrok. pass baseURL through unchanged so the empty
 			// case keeps the real HTTPS default and TLS rides the tunnel
-			// end-to-end (cloud egress).
+			// end-to-end (cloud egress). semantic routing inherits
+			// g.openaiHTTPClient, so openai embeddings/classifier ride the
+			// overlay too.
 			client, derr := g.agoraDial(g.cfg.Providers.OpenAI.AgoraTunnel)
 			if derr != nil {
 				return derr
 			}
+			g.openaiHTTPClient = client
 			g.providers[providers.ProviderOpenAI] = providers.NewOpenAIWithClient(apiKey, baseURL, client)
 			dl.Infof("initialized openai provider via agora tunnel '%s'", g.cfg.Providers.OpenAI.AgoraTunnel)
 		} else if g.cfg.Providers.OpenAI.ZrokShareToken != "" {
@@ -133,7 +144,8 @@ func (g *Gateway) initProviders() error {
 				return err
 			}
 			g.accesses = append(g.accesses, access)
-			g.providers[providers.ProviderOpenAI] = providers.NewOpenAIWithClient(apiKey, baseURL, access.HTTPClient())
+			g.openaiHTTPClient = access.HTTPClient()
+			g.providers[providers.ProviderOpenAI] = providers.NewOpenAIWithClient(apiKey, baseURL, g.openaiHTTPClient)
 			dl.Infof("initialized openai provider via zrok share '%s'", g.cfg.Providers.OpenAI.ZrokShareToken)
 		} else {
 			g.providers[providers.ProviderOpenAI] = providers.NewOpenAI(apiKey, baseURL)
@@ -147,8 +159,8 @@ func (g *Gateway) initProviders() error {
 
 	// initialize anthropic provider
 	if g.cfg.Providers.Anthropic != nil && g.cfg.Providers.Anthropic.APIKey != "" {
-		apiKey := os.ExpandEnv(g.cfg.Providers.Anthropic.APIKey)
-		baseURL := os.ExpandEnv(g.cfg.Providers.Anthropic.BaseURL)
+		apiKey := g.cfg.Providers.Anthropic.APIKey
+		baseURL := g.cfg.Providers.Anthropic.BaseURL
 
 		if g.cfg.Providers.Anthropic.AgoraTunnel != "" {
 			// agora wins over zrok. baseURL passes through unchanged (TLS rides
@@ -183,23 +195,22 @@ func (g *Gateway) initProviders() error {
 			if err := g.initLocalMulti(); err != nil {
 				return err
 			}
-		} else {
-			g.initLocalSingle()
+		} else if err := g.initLocalSingle(); err != nil {
+			return err
 		}
 	}
 
 	return nil
 }
 
-func (g *Gateway) initLocalSingle() {
+func (g *Gateway) initLocalSingle() error {
 	cfg := g.cfg.Providers.Local
 	if cfg.AgoraTunnel != "" {
 		// agora wins over zrok. semantic routing inherits g.localHTTPClient, so
 		// local embeddings/classifier ride the tunnel for free.
 		client, err := g.agoraDial(cfg.AgoraTunnel)
 		if err != nil {
-			dl.Errorf("failed to resolve agora tunnel '%s' for local provider: %v", cfg.AgoraTunnel, err)
-			return
+			return fmt.Errorf("resolve agora tunnel '%s' for local provider: %w", cfg.AgoraTunnel, err)
 		}
 		g.localHTTPClient = client
 		g.providers[providers.ProviderLocal] = providers.NewLocalWithClient(cfg.BaseURL, g.localHTTPClient)
@@ -207,8 +218,7 @@ func (g *Gateway) initLocalSingle() {
 	} else if cfg.ZrokShareToken != "" {
 		access, err := NewAccess(cfg.ZrokShareToken)
 		if err != nil {
-			dl.Errorf("failed to create zrok access for local provider: %v", err)
-			return
+			return fmt.Errorf("create zrok access for local provider: %w", err)
 		}
 		g.accesses = append(g.accesses, access)
 		g.localHTTPClient = access.HTTPClient()
@@ -218,6 +228,7 @@ func (g *Gateway) initLocalSingle() {
 		g.providers[providers.ProviderLocal] = providers.NewLocal(cfg.BaseURL)
 		dl.Infof("initialized local provider at '%s'", cfg.BaseURL)
 	}
+	return nil
 }
 
 func (g *Gateway) initLocalMulti() error {
@@ -332,7 +343,11 @@ func (g *Gateway) Run() error {
 		var share *Share
 		var err error
 		if g.cfg.Zrok.Share.Token != "" {
-			// use existing persistent share (private only)
+			// use existing persistent share (private only). an explicit
+			// conflicting mode must not be silently overridden.
+			if mode := g.cfg.Zrok.Share.Mode; mode != "" && mode != "private" {
+				return fmt.Errorf("zrok.share.mode '%s' conflicts with a persistent share token; persistent shares are always private", mode)
+			}
 			share, err = NewShareFromToken(g.cfg.Zrok.Share.Token)
 		} else {
 			share, err = NewShare(g.cfg.Zrok.Share.Mode)
@@ -436,9 +451,9 @@ func (g *Gateway) initSemanticRouter(cfg *routing.RoutingConfig) (*routing.Seman
 
 	// initialize embedding client if semantic matching is enabled
 	if cfg.Semantic != nil && cfg.Semantic.Enabled {
-		baseURL, apiKey, httpClient := g.resolveEmbedProvider(cfg.Semantic.Provider)
-		if baseURL == "" {
-			return nil, fmt.Errorf("embedding provider '%s' not configured", cfg.Semantic.Provider)
+		baseURL, apiKey, httpClient, err := g.resolveRoutingProvider(cfg.Semantic.Provider)
+		if err != nil {
+			return nil, fmt.Errorf("embedding provider: %w", err)
 		}
 		if httpClient != nil {
 			embedClient = routing.NewEmbedClientWithHTTPClient(cfg.Semantic.Provider, cfg.Semantic.Model, baseURL, apiKey, httpClient)
@@ -451,9 +466,10 @@ func (g *Gateway) initSemanticRouter(cfg *routing.RoutingConfig) (*routing.Seman
 	var classifierBaseURL, classifierAPIKey string
 	var classifierHTTPClient *http.Client
 	if cfg.Classifier != nil && cfg.Classifier.Enabled {
-		classifierBaseURL, classifierAPIKey, classifierHTTPClient = g.resolveEmbedProvider(cfg.Classifier.Provider)
-		if classifierBaseURL == "" {
-			return nil, fmt.Errorf("classifier provider '%s' not configured", cfg.Classifier.Provider)
+		var err error
+		classifierBaseURL, classifierAPIKey, classifierHTTPClient, err = g.resolveRoutingProvider(cfg.Classifier.Provider)
+		if err != nil {
+			return nil, fmt.Errorf("classifier provider: %w", err)
 		}
 	}
 
@@ -461,35 +477,48 @@ func (g *Gateway) initSemanticRouter(cfg *routing.RoutingConfig) (*routing.Seman
 	return routing.NewSemanticRouterWithClassifier(ctx, cfg, embedClient, classifierBaseURL, classifierAPIKey, classifierHTTPClient)
 }
 
-// resolveEmbedProvider looks up connection details from provider config.
-func (g *Gateway) resolveEmbedProvider(provider string) (baseURL, apiKey string, httpClient *http.Client) {
+// resolveRoutingProvider looks up connection details from provider config. it
+// owns the configured-and-usable gate: a missing block, a keyless openai
+// block, and an unknown provider name are all directed errors rather than
+// values that fail later at runtime.
+func (g *Gateway) resolveRoutingProvider(provider string) (baseURL, apiKey string, httpClient *http.Client, err error) {
 	if g.cfg.Providers == nil {
-		return "", "", nil
+		return "", "", nil, fmt.Errorf("routing provider '%s' not configured", provider)
 	}
 
 	switch provider {
 	case "local":
-		if g.cfg.Providers.Local != nil {
-			if multi, ok := g.providers[providers.ProviderLocal].(*providers.MultiLocal); ok {
-				baseURL = multi.PrimaryBaseURL()
-				httpClient = multi.RoundRobinClient()
-			} else {
-				baseURL = g.cfg.Providers.Local.BaseURL
-				if baseURL == "" {
-					baseURL = "http://localhost:11434"
-				}
-				httpClient = g.localHTTPClient
+		if g.cfg.Providers.Local == nil {
+			return "", "", nil, fmt.Errorf("routing provider 'local' not configured")
+		}
+		if multi, ok := g.providers[providers.ProviderLocal].(*providers.MultiLocal); ok {
+			baseURL = multi.PrimaryBaseURL()
+			httpClient = multi.RoundRobinClient()
+		} else {
+			baseURL = g.cfg.Providers.Local.BaseURL
+			if baseURL == "" {
+				baseURL = "http://localhost:11434"
 			}
+			httpClient = g.localHTTPClient
 		}
 	case "openai":
-		if g.cfg.Providers.OpenAI != nil {
-			apiKey = os.ExpandEnv(g.cfg.Providers.OpenAI.APIKey)
-			baseURL = os.ExpandEnv(g.cfg.Providers.OpenAI.BaseURL)
-			if baseURL == "" {
-				baseURL = "https://api.openai.com"
-			}
+		if g.cfg.Providers.OpenAI == nil {
+			return "", "", nil, fmt.Errorf("routing provider 'openai' not configured")
 		}
+		if g.cfg.Providers.OpenAI.APIKey == "" {
+			return "", "", nil, fmt.Errorf("routing provider 'openai' requires providers.openai.api_key")
+		}
+		apiKey = g.cfg.Providers.OpenAI.APIKey
+		baseURL = g.cfg.Providers.OpenAI.BaseURL
+		if baseURL == "" {
+			baseURL = "https://api.openai.com"
+		}
+		// overlay-backed when the provider is; base URL stays unchanged so
+		// TLS rides the overlay end-to-end.
+		httpClient = g.openaiHTTPClient
+	default:
+		return "", "", nil, fmt.Errorf("unknown routing provider '%s' (expected 'local' or 'openai')", provider)
 	}
 
-	return baseURL, apiKey, httpClient
+	return baseURL, apiKey, httpClient, nil
 }

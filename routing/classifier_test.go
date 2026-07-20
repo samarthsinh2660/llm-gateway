@@ -6,14 +6,16 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/openziti/llm-gateway/providers"
 )
 
 func TestClassifierMatcherSuccess(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := classifierChatResponse{
-			Choices: []classifierChoice{
+		resp := providers.ChatCompletionResponse{
+			Choices: []providers.Choice{
 				{
-					Message: classifierMessage{
+					Message: &providers.Message{
 						Role:    "assistant",
 						Content: `{"category": "coding", "confidence": 0.95}`,
 					},
@@ -55,10 +57,10 @@ func TestClassifierMatcherSuccess(t *testing.T) {
 
 func TestClassifierMatcherMarkdownWrapped(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := classifierChatResponse{
-			Choices: []classifierChoice{
+		resp := providers.ChatCompletionResponse{
+			Choices: []providers.Choice{
 				{
-					Message: classifierMessage{
+					Message: &providers.Message{
 						Role: "assistant",
 						Content: "```json\n{\"category\": \"creative\", \"confidence\": 0.8}\n```",
 					},
@@ -91,10 +93,10 @@ func TestClassifierMatcherMarkdownWrapped(t *testing.T) {
 
 func TestClassifierMatcherUnknownCategory(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := classifierChatResponse{
-			Choices: []classifierChoice{
+		resp := providers.ChatCompletionResponse{
+			Choices: []providers.Choice{
 				{
-					Message: classifierMessage{
+					Message: &providers.Message{
 						Role:    "assistant",
 						Content: `{"category": "unknown_route", "confidence": 0.9}`,
 					},
@@ -144,10 +146,10 @@ func TestClassifierMatcherServerError(t *testing.T) {
 
 func TestClassifierMatcherCaseInsensitiveCategory(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := classifierChatResponse{
-			Choices: []classifierChoice{
+		resp := providers.ChatCompletionResponse{
+			Choices: []providers.Choice{
 				{
-					Message: classifierMessage{
+					Message: &providers.Message{
 						Role:    "assistant",
 						Content: `{"category": "Coding", "confidence": 0.9}`,
 					},
@@ -179,10 +181,10 @@ func TestClassifierMatcherCache(t *testing.T) {
 	callCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
-		resp := classifierChatResponse{
-			Choices: []classifierChoice{
+		resp := providers.ChatCompletionResponse{
+			Choices: []providers.Choice{
 				{
-					Message: classifierMessage{
+					Message: &providers.Message{
 						Role:    "assistant",
 						Content: `{"category": "coding", "confidence": 0.95}`,
 					},
@@ -243,10 +245,10 @@ func TestClassifierMatcherWithAuth(t *testing.T) {
 	var gotAuth string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
-		resp := classifierChatResponse{
-			Choices: []classifierChoice{
+		resp := providers.ChatCompletionResponse{
+			Choices: []providers.Choice{
 				{
-					Message: classifierMessage{
+					Message: &providers.Message{
 						Role:    "assistant",
 						Content: `{"category": "coding", "confidence": 0.9}`,
 					},

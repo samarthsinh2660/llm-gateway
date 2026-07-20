@@ -1,7 +1,7 @@
-# Treat all text files as text, with LF (Unix) line-endings on commit and checkout
+# treat all text files as text, with LF (Unix) line-endings on commit and checkout
 * text eol=lf
 
-# Explicitly mark certain text files
+# explicitly mark certain text files
 *.attr text
 *.bat text
 *.cmake text
@@ -45,7 +45,7 @@
 *.yaml text
 *.yml text
 
-# Declare common binary file types
+# declare common binary file types
 *.docx binary
 *.exe binary
 *.gif binary

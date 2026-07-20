@@ -22,7 +22,16 @@ func (g *Gateway) newHandler() http.Handler {
 	mux.HandleFunc("GET /health", g.handleHealth)
 	if g.metricsHandler != nil {
 		mux.Handle("GET /metrics", g.metricsHandler)
+		mux.HandleFunc("/metrics", providers.HandleMethodNotAllowed)
 	}
+
+	// the mux's built-in 404/405 responses are plain text; every client-visible
+	// error stays OpenAI-shaped instead.
+	mux.HandleFunc("/", providers.HandleNotFound)
+	for _, path := range []string{"/v1/models", "/v1/chat/completions", "/health"} {
+		mux.HandleFunc(path, providers.HandleMethodNotAllowed)
+	}
+
 	if g.keyStore != nil {
 		return g.keyStore.Middleware(mux)
 	}
@@ -104,7 +113,21 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 			dl.Errorf("semantic routing error: %v", err)
 			// fall through to normal routing
 		} else if decision.Model != "" {
-			if keyEntry != nil && !CheckRoute(keyEntry, decision.Route) {
+			keyName := ""
+			if keyEntry != nil {
+				keyName = keyEntry.Name
+			}
+			// log the decision before applying restrictions, so denied requests
+			// leave a cascade trail too.
+			dl.Infof("semantic routing: key='%s' method=%s route='%s' model='%s' confidence=%.2f latency=%dms cascade=[%s]",
+				keyName, decision.Method, decision.Route, decision.Model, decision.Confidence, decision.LatencyMs, strings.Join(decision.Cascade, ","))
+			if g.meters != nil {
+				g.meters.routingDecisions.Add(ctx, 1, metric.WithAttributes(attribute.String("method", string(decision.Method))))
+			}
+			// route restrictions apply to every routed decision; explicit-model
+			// passthrough selects no route and is governed by the
+			// resolved-model check below.
+			if keyEntry != nil && decision.Method != routing.MethodExplicit && !CheckRoute(keyEntry, decision.Route) {
 				dl.Infof("key '%s' denied access to route '%s'", keyEntry.Name, decision.Route)
 				providers.WriteError(w,
 					providers.NewAPIError(fmt.Sprintf("route '%s' is not allowed for this API key", decision.Route), providers.ErrorTypePermission),
@@ -113,15 +136,6 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 				return
 			}
 			req.Model = decision.Model
-			keyName := ""
-			if keyEntry != nil {
-				keyName = keyEntry.Name
-			}
-			dl.Infof("semantic routing: key='%s' method=%s route='%s' model='%s' confidence=%.2f latency=%dms cascade=[%s]",
-				keyName, decision.Method, decision.Route, decision.Model, decision.Confidence, decision.LatencyMs, strings.Join(decision.Cascade, ","))
-			if g.meters != nil {
-				g.meters.routingDecisions.Add(ctx, 1, metric.WithAttributes(attribute.String("method", string(decision.Method))))
-			}
 		}
 	}
 
@@ -233,6 +247,11 @@ func (g *Gateway) handleStreamingCompletion(ctx context.Context, w http.Response
 			}
 		}
 	}
+
+	// the channel closed without a terminal Done or Err event; surface the
+	// truncation rather than letting the client read it as completion.
+	dl.Error("stream ended without a terminal event")
+	sse.WriteError(providers.ErrProviderError("upstream stream ended unexpectedly"))
 }
 
 func buildRequestInfo(req *providers.ChatCompletionRequest) *routing.RequestInfo {

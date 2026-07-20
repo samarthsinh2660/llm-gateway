@@ -2,7 +2,9 @@ package providers
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -91,7 +93,7 @@ func NewMultiLocal(opts []EndpointOption) *MultiLocal {
 }
 
 // next returns the next healthy endpoint using round-robin.
-// If all endpoints are unhealthy, returns the first endpoint as best-effort.
+// if all endpoints are unhealthy, returns the first endpoint as best-effort.
 func (m *MultiLocal) next() *endpoint {
 	n := len(m.endpoints)
 	start := m.counter.Add(1) - 1
@@ -111,15 +113,20 @@ func isNetworkError(err error) bool {
 	if err == nil {
 		return false
 	}
-	// check for net errors (connection refused, timeout, DNS, etc.)
-	if _, ok := err.(net.Error); ok {
+	// a caller/client cancellation is not an endpoint failure; don't fail over
+	// (a cancelled request context arrives wrapped in a net.Error).
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	// a dropped connection mid-response surfaces as EOF, and any transport-level
+	// net.Error (connection refused, timeout, DNS) is an endpoint failure that
+	// should fail over; application errors are not. errors.As unwraps, so no
+	// manual unwrap recursion is needed.
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 		return true
 	}
-	// unwrap and check inner error
-	if uw, ok := err.(interface{ Unwrap() error }); ok {
-		return isNetworkError(uw.Unwrap())
-	}
-	return false
+	var netErr net.Error
+	return errors.As(err, &netErr)
 }
 
 func (m *MultiLocal) ChatCompletion(ctx context.Context, req *ChatCompletionRequest) (*ChatCompletionResponse, error) {
@@ -192,7 +199,7 @@ func (m *MultiLocal) ListModels(ctx context.Context) ([]Model, error) {
 }
 
 // StartHealthChecks begins periodic health checking of all endpoints.
-// Failing endpoints are rechecked with exponential backoff (up to 10x the
+// failing endpoints are rechecked with exponential backoff (up to 10x the
 // base interval) to avoid hammering infrastructure that is rate-limiting.
 func (m *MultiLocal) StartHealthChecks(interval, timeout time.Duration) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -343,6 +350,11 @@ func (t *roundRobinTransport) RoundTrip(req *http.Request) (*http.Response, erro
 		if isNetworkError(err) {
 			dl.Errorf("endpoint '%s' network error: %v", ep.name, err)
 			ep.setHealthy(false)
+			// a consumed body without GetBody cannot be replayed safely; fail
+			// rather than send a drained reader to the next endpoint.
+			if req.Body != nil && req.GetBody == nil {
+				return nil, err
+			}
 			lastErr = err
 			continue
 		}
@@ -366,6 +378,16 @@ func (t *roundRobinTransport) doWithEndpoint(ep *endpoint, origReq *http.Request
 	req.URL.Scheme = epURL.Scheme
 	req.URL.Host = epURL.Host
 	req.Host = epURL.Host
+
+	// Clone shares the Body reader; give each attempt a fresh one so a
+	// failed-over request never sends a drained reader.
+	if origReq.GetBody != nil {
+		body, err := origReq.GetBody()
+		if err != nil {
+			return nil, fmt.Errorf("recreate request body: %w", err)
+		}
+		req.Body = body
+	}
 
 	transport := ep.local.client.Transport
 	if transport == nil {

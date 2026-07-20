@@ -60,7 +60,6 @@ providers:
 # metrics configuration
 # metrics:
 #   enabled: true
-#   listen: ":9090"  # optional: separate metrics server address
 
 # semantic routing configuration
 # when enabled, the model field becomes optional in requests.

@@ -51,8 +51,8 @@ func TestNonStreamingEcho(t *testing.T) {
 		t.Fatalf("choices = %d, want 1", len(resp.Choices))
 	}
 	choice := resp.Choices[0]
-	if choice.FinishReason != "stop" {
-		t.Errorf("finish_reason = %q, want stop", choice.FinishReason)
+	if choice.FinishReason == nil || *choice.FinishReason != "stop" {
+		t.Errorf("finish_reason = %v, want stop", choice.FinishReason)
 	}
 	if choice.Message == nil || !strings.Contains(choice.Message.GetContentString(), "hello world") {
 		t.Errorf("message did not echo the prompt: %+v", choice.Message)
@@ -133,8 +133,8 @@ func parseSSE(t *testing.T, body string) (content, finish, toolName string, sawD
 				toolName = ch.Delta.ToolCalls[0].Function.Name
 			}
 		}
-		if ch.FinishReason != "" {
-			finish = ch.FinishReason
+		if ch.FinishReason != nil {
+			finish = *ch.FinishReason
 		}
 	}
 	return
@@ -180,8 +180,8 @@ func TestToolCallNonStreaming(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 	choice := resp.Choices[0]
-	if choice.FinishReason != "tool_calls" {
-		t.Errorf("finish_reason = %q, want tool_calls", choice.FinishReason)
+	if choice.FinishReason == nil || *choice.FinishReason != "tool_calls" {
+		t.Errorf("finish_reason = %v, want tool_calls", choice.FinishReason)
 	}
 	if choice.Message == nil || len(choice.Message.ToolCalls) != 1 {
 		t.Fatalf("expected one tool call, got %+v", choice.Message)

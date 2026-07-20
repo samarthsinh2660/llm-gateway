@@ -1,11 +1,11 @@
 package gateway
 
-import "os"
-
 // capabilityExtras derives llm-gateway agora capabilities from the configured
 // providers and routing. It returns only the extras; the base capability
 // ("llm-routing") is supplied by the caller via agora.Derive. Ported from the
 // first agora pass (origin/agora-v0.1.0:gateway/agora_capabilities.go).
+// secrets are expanded once at config load, so the APIKey gates here read the
+// same values initProviders and collectAgoraTunnels do.
 func capabilityExtras(cfg *Config) []string {
 	var extras []string
 	if cfg == nil {
@@ -13,10 +13,10 @@ func capabilityExtras(cfg *Config) []string {
 	}
 
 	if cfg.Providers != nil {
-		if cfg.Providers.OpenAI != nil && os.ExpandEnv(cfg.Providers.OpenAI.APIKey) != "" {
+		if cfg.Providers.OpenAI != nil && cfg.Providers.OpenAI.APIKey != "" {
 			extras = append(extras, "openai")
 		}
-		if cfg.Providers.Anthropic != nil && os.ExpandEnv(cfg.Providers.Anthropic.APIKey) != "" {
+		if cfg.Providers.Anthropic != nil && cfg.Providers.Anthropic.APIKey != "" {
 			extras = append(extras, "anthropic")
 		}
 		if cfg.Providers.Local != nil {
