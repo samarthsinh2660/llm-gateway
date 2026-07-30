@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/michaelquigley/df/dl"
@@ -18,7 +19,23 @@ const (
 	MethodSemantic   Method = "semantic"
 	MethodClassifier Method = "classifier"
 	MethodDefault    Method = "default"
+	MethodCapability Method = "capability"
 )
+
+// wire contract mirror: github.com/netfoundry/sterling/internal/recipe carries
+// the same constants and a matching golden-string test. changes must land in
+// both repositories.
+// CapabilityVocabularyV1 is Sterling's gateway-owned route vocabulary. a
+// capability class is resolved against the configured route name; the
+// concrete model remains local gateway policy.
+const CapabilityVocabularyV1 = "sterling-classes/v1"
+
+// CapabilityFrontierCoding is the sole class in Sterling's v1 vocabulary.
+const CapabilityFrontierCoding = "frontier-coding"
+
+// CapabilityModelPrefix marks an OpenAI model ID as a Sterling capability
+// alias rather than a concrete provider model.
+const CapabilityModelPrefix = "sterling-capability:"
 
 // Decision describes the result of a routing decision.
 type Decision struct {
@@ -92,14 +109,27 @@ func validateRoutes(cfg *RoutingConfig) (map[string]RouteConfig, error) {
 		}
 	}
 
-	// a matching layer with no routes can never produce a usable decision.
+	// a routing block with no routes can never resolve a model — every layer
+	// selects into the route set — yet a configured block still advertises the
+	// 'auto' model and forces model-less requests through the cascade. refuse it,
+	// keeping the directed message for the matcher-specific cases.
 	if len(cfg.Routes) == 0 {
-		if cfg.Semantic != nil && cfg.Semantic.Enabled {
+		switch {
+		case cfg.Semantic != nil && cfg.Semantic.Enabled:
 			return nil, fmt.Errorf("routing.semantic.enabled requires at least one route")
-		}
-		if cfg.Classifier != nil && cfg.Classifier.Enabled {
+		case cfg.Classifier != nil && cfg.Classifier.Enabled:
 			return nil, fmt.Errorf("routing.classifier.enabled requires at least one route")
+		default:
+			return nil, fmt.Errorf("routing requires at least one route")
 		}
+	}
+
+	// an enabled classifier needs a model to call. unlike the embedding matcher
+	// (which embeds at startup and so fails loud on a bad model) the classifier
+	// is constructed lazily, so an empty model would otherwise surface only at
+	// request time as a silent fall-through to the default route.
+	if cfg.Classifier != nil && cfg.Classifier.Enabled && cfg.Classifier.Model == "" {
+		return nil, fmt.Errorf("routing.classifier.model is required when routing.classifier.enabled is true")
 	}
 
 	return routeMap, nil
@@ -164,6 +194,11 @@ func NewSemanticRouterWithClassifier(ctx context.Context, cfg *RoutingConfig, em
 // Enabled returns true if semantic routing is configured.
 func (sr *SemanticRouter) Enabled() bool {
 	return sr != nil && sr.cfg != nil
+}
+
+// AllowsExplicitModel reports the configured explicit-model policy.
+func (sr *SemanticRouter) AllowsExplicitModel() bool {
+	return sr != nil && sr.cfg != nil && sr.cfg.AllowExplicit()
 }
 
 // Route performs the routing cascade and returns a decision.
@@ -320,4 +355,52 @@ func (sr *SemanticRouter) Route(ctx context.Context, info *RequestInfo) (*Decisi
 		LatencyMs: time.Since(start).Milliseconds(),
 		Cascade:   cascade,
 	}, nil
+}
+
+// ResolveCapability resolves a signed Sterling capability coordinate without
+// running the request-routing cascade. capability classes name gateway-owned
+// routes, so the result is deterministic for the gateway configuration at the
+// time of resolution.
+func (sr *SemanticRouter) ResolveCapability(vocabulary, class string) (*Decision, error) {
+	if vocabulary != CapabilityVocabularyV1 {
+		return nil, fmt.Errorf("unsupported capability vocabulary %q", vocabulary)
+	}
+	if class != CapabilityFrontierCoding {
+		return nil, fmt.Errorf("unknown capability class %q in vocabulary %q", class, vocabulary)
+	}
+	route, ok := sr.routeMap[class]
+	if !ok {
+		return nil, fmt.Errorf("unknown capability class %q", class)
+	}
+	return &Decision{
+		Route:      class,
+		Model:      route.Model,
+		Method:     MethodCapability,
+		Confidence: 1,
+		Cascade:    []string{"capability:" + class},
+	}, nil
+}
+
+// IsCapabilityModel reports whether model uses Sterling's capability-alias
+// namespace.
+func IsCapabilityModel(model string) bool {
+	return strings.HasPrefix(model, CapabilityModelPrefix)
+}
+
+// ResolveCapabilityModel parses and resolves a capability carried in the
+// OpenAI model field. the alias shape is
+// sterling-capability:<vocabulary>/<class>. Sterling's signed vocabulary
+// grammar is exactly <segment>/v<N>, so the complete alias has three
+// slash-separated parts; changing that grammar requires coordinated changes
+// to Sterling's builder and this parser.
+func (sr *SemanticRouter) ResolveCapabilityModel(model string) (*Decision, error) {
+	value, ok := strings.CutPrefix(model, CapabilityModelPrefix)
+	if !ok {
+		return nil, fmt.Errorf("model %q is not a capability alias", model)
+	}
+	parts := strings.Split(value, "/")
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		return nil, fmt.Errorf("malformed capability model %q", model)
+	}
+	return sr.ResolveCapability(parts[0]+"/"+parts[1], parts[2])
 }

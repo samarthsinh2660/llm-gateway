@@ -97,7 +97,7 @@ func TestDialerDialContextRoutesThroughDial(t *testing.T) {
 	if !ok || transport.DialContext == nil {
 		t.Fatal("expected an http.Transport with a DialContext")
 	}
-	// The dialer ignores addr and routes through tunnel.Dial by name.
+	// the dialer ignores addr and routes through tunnel.Dial by name.
 	_, _ = transport.DialContext(context.Background(), "tcp", "ignored:1234")
 	if len(ops.dialed) != 1 || ops.dialed[0] != "relay" {
 		t.Fatalf("DialContext must dial the attached tunnel: %#v", ops.dialed)

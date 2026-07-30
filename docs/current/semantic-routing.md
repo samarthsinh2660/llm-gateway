@@ -102,7 +102,19 @@ routes:
 | `description` | classifier | included in the classifier prompt so the LLM understands what each route is for |
 | `examples` | embeddings | converted to embedding vectors at startup for similarity matching |
 
-You can define as many routes as you need. A route with no `examples` is invisible to the embedding layer but can still be reached by heuristics or the classifier.
+You can define as many routes as you need. A route with no `examples` is invisible to the embedding layer but can still be reached by heuristics or the classifier. If the embedding layer is enabled, at least one route must carry examples -- a semantic config where no route has any is refused at startup, since the matcher could never select a route (and would silently shadow an enabled classifier).
+
+## Sterling capability aliases
+
+Sterling uses the gateway's route map as the realization of its signed `sterling-classes/v1` vocabulary. A token-governed capability run carries its coordinate in the existing OpenAI `model` field:
+
+```json
+{"model":"sterling-capability:sterling-classes/v1/frontier-coding","messages":[...]}
+```
+
+The gateway recognizes this strict virtual-model namespace and resolves the closed v1 class `frontier-coding` to that configured route's concrete model before provider dispatch. The normal OpenAI completion response reports that concrete model. Unknown vocabularies and classes fail before dispatch, even if a route happens to share the unknown class's name. API-key route and concrete-model restrictions both apply. Sterling records the first response binding and sends the concrete model on later turns.
+
+Capability aliases are an explicit model-selection mechanism. A gateway configured with `routing.allow_explicit_model: false` rejects them rather than silently discarding the signed class and running the ordinary semantic cascade.
 
 ## Layer 1: Heuristics
 

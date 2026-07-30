@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"testing/iotest"
 )
 
 func TestIsNetworkError(t *testing.T) {
@@ -24,6 +25,8 @@ func TestIsNetworkError(t *testing.T) {
 		{"net timeout wrapped in url.Error", &url.Error{Op: "Get", Err: netTimeout{}}, true},
 		{"context canceled", context.Canceled, false},
 		{"context canceled wrapped in url.Error", &url.Error{Op: "Get", Err: context.Canceled}, false},
+		{"context deadline exceeded", context.DeadlineExceeded, false},
+		{"context deadline exceeded wrapped in url.Error", &url.Error{Op: "Get", Err: context.DeadlineExceeded}, false},
 		{"application error", fmt.Errorf("model not found"), false},
 	}
 	for _, tt := range tests {
@@ -69,5 +72,48 @@ func TestRoundRobinTransportReplaysFullBodyOnFailover(t *testing.T) {
 
 	if string(received) != body {
 		t.Errorf("failover delivered body %q, want %q", received, body)
+	}
+}
+
+// bodyReadErrorTransport returns valid headers but a body that fails mid-read,
+// simulating a connection dropped after headers arrive.
+type bodyReadErrorTransport struct{}
+
+func (bodyReadErrorTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(iotest.ErrReader(io.ErrUnexpectedEOF)),
+	}, nil
+}
+
+func TestRoundRobinTransportFailsOverOnBodyReadError(t *testing.T) {
+	var served bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		served = true
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	// the flaky endpoint returns headers then a body that dies with
+	// ErrUnexpectedEOF; that read failure must fail over, not reach the caller.
+	m := NewMultiLocal([]EndpointOption{
+		{Name: "flaky", BaseURL: "http://flaky.local", HTTPClient: &http.Client{Transport: bodyReadErrorTransport{}}},
+		{Name: "live", BaseURL: srv.URL},
+	})
+	client := m.RoundRobinClient()
+
+	resp, err := client.Post("http://multi.local/api/embed", "application/json", strings.NewReader(`{"input":["x"]}`))
+	if err != nil {
+		t.Fatalf("expected failover to succeed, got %v", err)
+	}
+	got, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatalf("body read after failover failed: %v", err)
+	}
+	if !served || string(got) != `{"ok":true}` {
+		t.Errorf("failover did not reach the live endpoint; served=%v body=%q", served, got)
 	}
 }

@@ -72,6 +72,13 @@ func NewEmbeddingMatcher(ctx context.Context, client Embedder, routes []RouteCon
 		em.routes = append(em.routes, re)
 	}
 
+	// semantic routing was explicitly enabled but no route carries an exemplar,
+	// so the matcher could never select a route -- and its mere presence would
+	// silently shadow an enabled classifier. refuse rather than start ineffective.
+	if len(em.routes) == 0 {
+		return nil, fmt.Errorf("semantic routing needs at least one route with examples; add examples or disable routing.semantic")
+	}
+
 	return em, nil
 }
 
@@ -87,8 +94,10 @@ func (em *EmbeddingMatcher) Match(ctx context.Context, info *RequestInfo) (strin
 	if prompt == "" {
 		return "", 0, nil
 	}
-	if len(prompt) > maxEmbedChars {
-		prompt = prompt[:maxEmbedChars]
+	// truncate by rune, not byte, so the cap is honestly in characters and never
+	// splits a multi-byte UTF-8 character mid-way.
+	if runes := []rune(prompt); len(runes) > maxEmbedChars {
+		prompt = string(runes[:maxEmbedChars])
 	}
 
 	var vec []float64

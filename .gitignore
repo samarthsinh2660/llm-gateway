@@ -8,17 +8,17 @@
 etc/dev*
 etc/*.pem
 
-# Dependencies
+# dependencies
 node_modules/
 
-# Artifacts
+# artifacts
 /dist/
 
-# Generated files
+# generated files
 .docusaurus
 .cache-loader
 
-# Misc
+# misc
 .DS_Store
 .env.local
 .env.development.local

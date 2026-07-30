@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -113,9 +114,13 @@ func isNetworkError(err error) bool {
 	if err == nil {
 		return false
 	}
-	// a caller/client cancellation is not an endpoint failure; don't fail over
-	// (a cancelled request context arrives wrapped in a net.Error).
-	if errors.Is(err, context.Canceled) {
+	// a cancellation or an exhausted request deadline is a property of the
+	// request, not the endpoint; don't fail over. both arrive wrapped in a
+	// net.Error, but retrying an already-doomed request just re-expires and
+	// marks every endpoint unhealthy. a genuine endpoint dial timeout is a
+	// net.Error that is not the context.DeadlineExceeded sentinel, so it still
+	// fails over below. errors.Is handles the wrapped forms.
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
 	// a dropped connection mid-response surfaces as EOF, and any transport-level
@@ -393,7 +398,23 @@ func (t *roundRobinTransport) doWithEndpoint(ep *endpoint, origReq *http.Request
 	if transport == nil {
 		transport = http.DefaultTransport
 	}
-	return transport.RoundTrip(req)
+	resp, err := transport.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+
+	// buffer the body here so a mid-read network failure (the connection ending
+	// with io.ErrUnexpectedEOF after headers arrived) is caught in the retry
+	// loop rather than surfacing to the caller once RoundTrip has "succeeded".
+	// this transport serves only the non-streaming embedding/classifier clients,
+	// which read the whole body anyway, so buffering costs nothing extra.
+	body, readErr := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if readErr != nil {
+		return nil, readErr
+	}
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	return resp, nil
 }
 
 // Close stops health checks and releases resources.

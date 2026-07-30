@@ -20,9 +20,9 @@ type config struct {
 	errorType   string        // OpenAI error type to inject (e.g. "rate_limit_error")
 }
 
-// server is a fake OpenAI-compatible backend. It performs no real inference and
+// server is a fake OpenAI-compatible backend. it performs no real inference and
 // returns deterministic responses, so it can stand in for a model in tests and
-// demos. It reuses the wire types and SSE/error helpers from the providers
+// demos. it reuses the wire types and SSE/error helpers from the providers
 // package so its output matches what the gateway expects from a real backend.
 type server struct {
 	cfg  config
@@ -42,7 +42,7 @@ func newServer(cfg config) *server {
 	}
 }
 
-// handler wires the OpenAI-compatible routes. Shared by main and tests.
+// handler wires the OpenAI-compatible routes. shared by main and tests.
 func (s *server) handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/models", s.handleModels)
@@ -160,7 +160,7 @@ func (s *server) respondText(w http.ResponseWriter, req *providers.ChatCompletio
 }
 
 // respondToolCall simulates a tool call by emitting the first offered tool's
-// function name with deterministic empty arguments. It exercises the gateway's
+// function name with deterministic empty arguments. it exercises the gateway's
 // tool-calling translation path without any real model.
 func (s *server) respondToolCall(w http.ResponseWriter, req *providers.ChatCompletionRequest, model string) {
 	fnName := req.Tools[0].Function.Name

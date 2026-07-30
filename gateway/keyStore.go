@@ -79,7 +79,7 @@ func KeyFromContext(ctx context.Context) *APIKeyEntry {
 }
 
 // CheckModel reports whether the key is allowed to use the given model.
-// A key with no AllowedModels restrictions permits all models.
+// a key with no AllowedModels restrictions permits all models.
 func CheckModel(entry *APIKeyEntry, model string) bool {
 	if len(entry.AllowedModels) == 0 {
 		return true
@@ -93,7 +93,7 @@ func CheckModel(entry *APIKeyEntry, model string) bool {
 }
 
 // CheckRoute reports whether the key is allowed to use the given semantic route.
-// A key with no AllowedRoutes restrictions permits all routes.
+// a key with no AllowedRoutes restrictions permits all routes.
 func CheckRoute(entry *APIKeyEntry, route string) bool {
 	if len(entry.AllowedRoutes) == 0 {
 		return true

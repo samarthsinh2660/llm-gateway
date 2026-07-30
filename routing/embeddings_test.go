@@ -3,6 +3,7 @@ package routing
 import (
 	"context"
 	"math"
+	"strings"
 	"testing"
 )
 
@@ -255,18 +256,17 @@ func TestEmbeddingMatcherCache(t *testing.T) {
 func TestEmbeddingMatcherNoExamples(t *testing.T) {
 	embedder := &mockEmbedder{vectors: map[string][]float64{}}
 
+	// semantic routing enabled but not one route carries an exemplar: the
+	// matcher could never match, so construction must fail loud rather than
+	// start silently ineffective (and shadowing an enabled classifier).
 	routes := []RouteConfig{
 		{Name: "r1", Model: "m1"}, // no examples
 	}
 
 	cfg := &SemanticConfig{Enabled: true, Comparison: "centroid"}
 
-	em, err := NewEmbeddingMatcher(context.Background(), embedder, routes, cfg)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if len(em.routes) != 0 {
-		t.Errorf("expected no embedded routes, got %d", len(em.routes))
+	if _, err := NewEmbeddingMatcher(context.Background(), embedder, routes, cfg); err == nil ||
+		!strings.Contains(err.Error(), "needs at least one route with examples") {
+		t.Fatalf("NewEmbeddingMatcher() = %v, want no-exemplars error", err)
 	}
 }

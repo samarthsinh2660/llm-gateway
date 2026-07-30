@@ -72,9 +72,11 @@ func TestHandlerFallbackErrorsAreOpenAIShaped(t *testing.T) {
 // stubChatProvider returns a canned non-streaming response.
 type stubChatProvider struct {
 	resp *providers.ChatCompletionResponse
+	req  *providers.ChatCompletionRequest
 }
 
-func (p *stubChatProvider) ChatCompletion(_ context.Context, _ *providers.ChatCompletionRequest) (*providers.ChatCompletionResponse, error) {
+func (p *stubChatProvider) ChatCompletion(_ context.Context, req *providers.ChatCompletionRequest) (*providers.ChatCompletionResponse, error) {
+	p.req = req
 	return p.resp, nil
 }
 
@@ -135,6 +137,104 @@ func TestExplicitModelPassthroughNotRouteRestricted(t *testing.T) {
 	handler.ServeHTTP(rr, req)
 	if rr.Code != http.StatusForbidden {
 		t.Fatalf("disallowed semantic route returned %d, want 403; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestCapabilityModelAliasResolvesBeforeDispatch(t *testing.T) {
+	sr, err := routing.NewSemanticRouter(context.Background(), &routing.RoutingConfig{
+		Routes: []routing.RouteConfig{{Name: "frontier-coding", Model: "llama3"}},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stub := &stubChatProvider{resp: &providers.ChatCompletionResponse{
+		ID: "chatcmpl-capability", Model: "upstream-alias",
+	}}
+	pmap := map[providers.ProviderType]providers.Provider{providers.ProviderLocal: stub}
+	g := &Gateway{
+		cfg:            &Config{},
+		providers:      pmap,
+		router:         providers.NewRouter(pmap),
+		semanticRouter: sr,
+	}
+	handler := g.newHandler()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(
+		`{"model":"sterling-capability:sterling-classes/v1/frontier-coding","messages":[{"role":"user","content":"hi"}]}`,
+	))
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("capability request returned %d: %s", rr.Code, rr.Body.String())
+	}
+	if stub.req == nil || stub.req.Model != "llama3" {
+		t.Fatalf("provider request = %+v, want resolved concrete model", stub.req)
+	}
+	var response providers.ChatCompletionResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Model != "llama3" {
+		t.Fatalf("reported model = %q, want gateway binding", response.Model)
+	}
+
+	allowExplicit := false
+	denyExplicitRouter, err := routing.NewSemanticRouter(context.Background(), &routing.RoutingConfig{
+		AllowExplicitModel: &allowExplicit,
+		Routes:             []routing.RouteConfig{{Name: "frontier-coding", Model: "llama3"}},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.semanticRouter = denyExplicitRouter
+	stub.req = nil
+	handler = g.newHandler()
+	req = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(
+		`{"model":"sterling-capability:sterling-classes/v1/frontier-coding","messages":[{"role":"user","content":"hi"}]}`,
+	))
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest || stub.req != nil {
+		t.Fatalf("explicit-model-disabled capability returned %d, provider request %+v", rr.Code, stub.req)
+	}
+	g.semanticRouter = sr
+	handler = g.newHandler()
+
+	req = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(
+		`{"model":"sterling-capability:sterling-classes/v2/frontier-coding","messages":[{"role":"user","content":"hi"}]}`,
+	))
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("unknown vocabulary returned %d, want 400", rr.Code)
+	}
+
+	g.keyStore = mustKeyStore(t, []APIKeyEntry{{
+		Name: "route-denied", Key: "sk-route-denied", AllowedRoutes: []string{"general"},
+	}})
+	handler = g.newHandler()
+	req = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(
+		`{"model":"sterling-capability:sterling-classes/v1/frontier-coding","messages":[{"role":"user","content":"hi"}]}`,
+	))
+	req.Header.Set("Authorization", "Bearer sk-route-denied")
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("disallowed capability route returned %d, want 403", rr.Code)
+	}
+
+	g.keyStore = mustKeyStore(t, []APIKeyEntry{{
+		Name: "model-denied", Key: "sk-model-denied",
+		AllowedRoutes: []string{"frontier-coding"}, AllowedModels: []string{"other-model"},
+	}})
+	handler = g.newHandler()
+	req = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(
+		`{"model":"sterling-capability:sterling-classes/v1/frontier-coding","messages":[{"role":"user","content":"hi"}]}`,
+	))
+	req.Header.Set("Authorization", "Bearer sk-model-denied")
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("disallowed capability model returned %d, want 403", rr.Code)
 	}
 }
 

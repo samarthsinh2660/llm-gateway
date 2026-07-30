@@ -101,6 +101,8 @@ agora tunnel delete llm-gateway        # tears it down when you're done
 
 A tunnel under the serve name whose mode is not TCP, or that is not provisioned at all, is a hard startup error rather than a silent fallback.
 
+Bind-only is deliberate: a gateway-side create-or-bind path was rejected because provisioning in the gateway reintroduces a create race between instances, a tunnel leak when a creating process crashes before its delete, and an ephemeral-grant shape where access only works because the creator happened to be the binder. Owning the front-door tunnel's lifecycle operator-side deletes all three, leaving the gateway one testable obligation: bind what it was given or refuse loudly.
+
 **Bind is account-scoped; grants are separate.** The gateway binds a tunnel its **account** owns -- binding is conferred by account ownership, not by grants. Grants are for the **clients/dialers** that should be allowed to reach the served tunnel; document and apply them as client access, not as bind permission. (Current Agora additionally requires the tunnel to live in the gateway's own enrolled environment; an upcoming Agora update relaxes that to any account-owned environment, served one at a time.)
 
 The gateway serves HTTP over the direct tcp-mode tunnel and advertises `tunnel_mode: http` as catalog metadata -- the mode (tcp) and the catalog label (http) are deliberately distinct.

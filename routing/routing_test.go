@@ -93,6 +93,25 @@ func TestSemanticRouterRejectsUnknownRouteRefs(t *testing.T) {
 		t.Fatalf("NewSemanticRouter() = %v, want semantic-without-routes error", err)
 	}
 
+	// a configured routing block with no routes at all can never resolve a
+	// model, yet would advertise 'auto'; refuse it even with no matcher enabled.
+	cfg = &RoutingConfig{AllowExplicitModel: boolPtr(false)}
+	if _, err := NewSemanticRouter(context.Background(), cfg, nil); err == nil ||
+		!strings.Contains(err.Error(), "routing requires at least one route") {
+		t.Fatalf("NewSemanticRouter() = %v, want empty-routing error", err)
+	}
+
+	// an enabled classifier with no model can never call its backend; it is
+	// constructed lazily, so the gap would otherwise surface only at request time.
+	cfg = &RoutingConfig{
+		Classifier: &ClassifierConfig{Enabled: true},
+		Routes:     []RouteConfig{{Name: "coding", Model: "llama3"}},
+	}
+	if _, err := NewSemanticRouter(context.Background(), cfg, nil); err == nil ||
+		!strings.Contains(err.Error(), "routing.classifier.model is required") {
+		t.Fatalf("NewSemanticRouter() = %v, want classifier-model error", err)
+	}
+
 	// an unnamed route is unaddressable and unauthorizable.
 	cfg = &RoutingConfig{
 		Routes: []RouteConfig{{Name: "", Model: "llama3"}},
@@ -164,6 +183,44 @@ func TestSemanticRouterHeuristic(t *testing.T) {
 	}
 	if decision.Model != "llama3" {
 		t.Errorf("expected 'llama3', got '%s'", decision.Model)
+	}
+}
+
+func TestResolveCapability(t *testing.T) {
+	const golden = "sterling-capability:sterling-classes/v1/frontier-coding"
+	if got := CapabilityModelPrefix + CapabilityVocabularyV1 + "/" + CapabilityFrontierCoding; got != golden {
+		t.Fatalf("capability wire alias = %q, want %q; update Sterling's mirrored contract with any change", got, golden)
+	}
+	sr, err := NewSemanticRouter(context.Background(), &RoutingConfig{
+		Routes: []RouteConfig{
+			{Name: "frontier-coding", Model: "claude-opus-4-x"},
+			{Name: "general-chat", Model: "gpt-4.1"},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := sr.ResolveCapability(CapabilityVocabularyV1, "frontier-coding")
+	if err != nil || decision.Model != "claude-opus-4-x" || decision.Route != "frontier-coding" {
+		t.Fatalf("decision = %+v, err = %v", decision, err)
+	}
+	for _, tc := range [][2]string{{"sterling-classes/v2", "frontier-coding"}, {CapabilityVocabularyV1, "general-chat"}} {
+		if _, err := sr.ResolveCapability(tc[0], tc[1]); err == nil {
+			t.Fatalf("ResolveCapability(%q, %q) succeeded", tc[0], tc[1])
+		}
+	}
+	decision, err = sr.ResolveCapabilityModel(golden)
+	if err != nil || decision.Model != "claude-opus-4-x" {
+		t.Fatalf("ResolveCapabilityModel() = %+v, %v", decision, err)
+	}
+	for _, model := range []string{
+		CapabilityModelPrefix,
+		CapabilityModelPrefix + "sterling-classes/v1",
+		CapabilityModelPrefix + "sterling-classes/v1/frontier-coding/extra",
+	} {
+		if _, err := sr.ResolveCapabilityModel(model); err == nil {
+			t.Fatalf("ResolveCapabilityModel(%q) succeeded", model)
+		}
 	}
 }
 

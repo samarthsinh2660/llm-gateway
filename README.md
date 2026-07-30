@@ -438,19 +438,19 @@ client = OpenAI(
     api_key="not-needed"  # gateway handles auth
 )
 
-# Routes to OpenAI
+# routes to OpenAI
 response = client.chat.completions.create(
     model="gpt-4o",
     messages=[{"role": "user", "content": "Hello!"}]
 )
 
-# Routes to Anthropic (translated automatically)
+# routes to Anthropic (translated automatically)
 response = client.chat.completions.create(
     model="claude-sonnet-4-20250514",
     messages=[{"role": "user", "content": "Hello!"}]
 )
 
-# Routes to local backend (Ollama, vLLM, etc.)
+# routes to local backend (Ollama, vLLM, etc.)
 response = client.chat.completions.create(
     model="llama3.2",
     messages=[{"role": "user", "content": "Hello!"}]

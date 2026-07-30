@@ -26,7 +26,7 @@ func NewRouter(providers map[ProviderType]Provider) *Router {
 }
 
 // Route returns the provider for the given model name.
-// Routing rules:
+// routing rules:
 // - gpt-*, o1-*, o3-* -> OpenAI
 // - claude-* -> Anthropic
 // - gemini-*, gemma-* -> Gemini (dash-separated only; "gemma4:e4b" stays Local)
@@ -74,15 +74,4 @@ func (r *Router) resolveProvider(model string) ProviderType {
 func (r *Router) GetProvider(pt ProviderType) (Provider, bool) {
 	p, ok := r.providers[pt]
 	return p, ok
-}
-
-// ListAllModels returns models from all configured providers.
-func (r *Router) ListAllModels() []Model {
-	var allModels []Model
-	for _, provider := range r.providers {
-		if models, err := provider.ListModels(nil); err == nil {
-			allModels = append(allModels, models...)
-		}
-	}
-	return allModels
 }

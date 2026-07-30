@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v0.1.6
+
+FEATURE: Sterling capability coordinates can be carried as strict virtual model aliases on the existing OpenAI chat surface. The gateway resolves `sterling-capability:sterling-classes/v1/<class>` to the configured route model before provider dispatch while applying explicit-model policy plus route and concrete-model API-key restrictions. The v1 vocabulary currently contains only `frontier-coding`.
+
+CHANGE: Every chat response now reports the concrete model selected by the gateway in its `model` field, for both non-streaming responses and streaming chunks. The gateway no longer passes through an upstream provider's differing model identifier; this makes the reported binding authoritative for all clients, not only Sterling capability runs. When the upstream reports a different identifier (a dated snapshot or server-side alias), the gateway logs it -- the tripwire that surfaces provider-side aliasing that would otherwise be normalized away.
+
 FIX: Multi-endpoint failover corrupted retried requests. A request that failed over to another endpoint reused an already-consumed request body, so the surviving endpoint received an empty or truncated payload -- most damaging for the embedding and classifier calls that ride the same round-robin transport, where a blank body could return a plausible-but-wrong result. Failover now installs a fresh body on every attempt (and refuses to replay a body it cannot recreate rather than send a drained one). It also treats a dropped connection (`io.EOF`/`io.ErrUnexpectedEOF`) as an endpoint failure worth retrying, while a client-cancelled request (`context.Canceled`) is no longer mistaken for one.
 
 FIX: Streaming responses now surface upstream errors instead of swallowing them. A mid-stream error from any provider -- an Anthropic `error` event, or an OpenAI/local `{"error": ...}` envelope that previously decoded into an empty chunk -- is delivered to the client as an SSE error and the stream is closed; a stream that ends without its terminal event no longer reads as a successful completion. Intermediate streaming chunks now emit `finish_reason: null` per the OpenAI streaming contract rather than omitting the field.

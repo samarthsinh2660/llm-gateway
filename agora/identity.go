@@ -59,8 +59,8 @@ func resolveIdentity(cfg *Config, defaults Defaults) (Identity, error) {
 }
 
 // serveTunnelName is the single source of truth for the bind serve tunnel name.
-// It is both the name Serve binds and the catalog advertisement Name (the
-// client's dial key), so the two can never diverge. It resolves regardless of
+// it is both the name Serve binds and the catalog advertisement Name (the
+// client's dial key), so the two can never diverge. it resolves regardless of
 // whether serving is enabled in this process: a publish-only gateway still
 // advertises the name clients should dial.
 func serveTunnelName(cfg *Config, instanceName string) string {

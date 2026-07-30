@@ -105,37 +105,38 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 
 	keyEntry := KeyFromContext(ctx)
 
+	capabilityResolved := false
+	if routing.IsCapabilityModel(req.Model) {
+		if g.semanticRouter == nil || !g.semanticRouter.Enabled() {
+			providers.WriteError(w, providers.NewAPIError("capability resolution is not configured", providers.ErrorTypeInvalidRequest), http.StatusBadRequest)
+			return
+		}
+		if !g.semanticRouter.AllowsExplicitModel() {
+			providers.WriteError(w, providers.NewAPIError("capability models are disabled by routing.allow_explicit_model=false", providers.ErrorTypeInvalidRequest), http.StatusBadRequest)
+			return
+		}
+		decision, err := g.semanticRouter.ResolveCapabilityModel(req.Model)
+		if err != nil {
+			providers.WriteError(w, providers.NewAPIError(err.Error(), providers.ErrorTypeInvalidRequest), http.StatusBadRequest)
+			return
+		}
+		if g.logAndAuthorizeDecision(ctx, w, keyEntry, decision, &req) {
+			return
+		}
+		capabilityResolved = true
+	}
+
 	// semantic routing: select model if not explicitly provided (or override if configured)
-	if g.semanticRouter != nil && g.semanticRouter.Enabled() {
+	if !capabilityResolved && g.semanticRouter != nil && g.semanticRouter.Enabled() {
 		info := buildRequestInfo(&req)
 		decision, err := g.semanticRouter.Route(ctx, info)
 		if err != nil {
 			dl.Errorf("semantic routing error: %v", err)
 			// fall through to normal routing
 		} else if decision.Model != "" {
-			keyName := ""
-			if keyEntry != nil {
-				keyName = keyEntry.Name
-			}
-			// log the decision before applying restrictions, so denied requests
-			// leave a cascade trail too.
-			dl.Infof("semantic routing: key='%s' method=%s route='%s' model='%s' confidence=%.2f latency=%dms cascade=[%s]",
-				keyName, decision.Method, decision.Route, decision.Model, decision.Confidence, decision.LatencyMs, strings.Join(decision.Cascade, ","))
-			if g.meters != nil {
-				g.meters.routingDecisions.Add(ctx, 1, metric.WithAttributes(attribute.String("method", string(decision.Method))))
-			}
-			// route restrictions apply to every routed decision; explicit-model
-			// passthrough selects no route and is governed by the
-			// resolved-model check below.
-			if keyEntry != nil && decision.Method != routing.MethodExplicit && !CheckRoute(keyEntry, decision.Route) {
-				dl.Infof("key '%s' denied access to route '%s'", keyEntry.Name, decision.Route)
-				providers.WriteError(w,
-					providers.NewAPIError(fmt.Sprintf("route '%s' is not allowed for this API key", decision.Route), providers.ErrorTypePermission),
-					http.StatusForbidden,
-				)
+			if g.logAndAuthorizeDecision(ctx, w, keyEntry, decision, &req) {
 				return
 			}
-			req.Model = decision.Model
 		}
 	}
 
@@ -171,7 +172,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	if req.Stream {
 		g.handleStreamingCompletion(ctx, w, provider, &req)
 	} else {
-		g.handleNonStreamingCompletion(ctx, w, provider, &req)
+		g.handleNonStreamingCompletion(ctx, w, provider, providerType, &req)
 	}
 
 	if g.meters != nil {
@@ -193,16 +194,56 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
-func (g *Gateway) handleNonStreamingCompletion(ctx context.Context, w http.ResponseWriter, provider providers.Provider, req *providers.ChatCompletionRequest) {
+// logAndAuthorizeDecision is the single owner of key->route authorization for
+// both the capability and semantic-routing paths. It logs the decision line and
+// the routing meter, then — for a decision that actually selected a route
+// (Route != "", which excludes explicit-model passthrough) — denies with a 403
+// when the key may not use that route, returning true. On success it binds the
+// resolved model onto req and returns false.
+func (g *Gateway) logAndAuthorizeDecision(ctx context.Context, w http.ResponseWriter, keyEntry *APIKeyEntry, decision *routing.Decision, req *providers.ChatCompletionRequest) (denied bool) {
+	keyName := ""
+	if keyEntry != nil {
+		keyName = keyEntry.Name
+	}
+	// log the decision before applying restrictions, so denied requests leave a
+	// cascade trail too.
+	dl.Infof("semantic routing: key='%s' method=%s route='%s' model='%s' confidence=%.2f latency=%dms cascade=[%s]",
+		keyName, decision.Method, decision.Route, decision.Model, decision.Confidence, decision.LatencyMs, strings.Join(decision.Cascade, ","))
+	if g.meters != nil {
+		g.meters.routingDecisions.Add(ctx, 1, metric.WithAttributes(attribute.String("method", string(decision.Method))))
+	}
+	// route restrictions apply only to a decision that selected a route; an
+	// explicit-model passthrough has no route (Route == "") and is governed by
+	// the resolved-model check downstream.
+	if keyEntry != nil && decision.Route != "" && !CheckRoute(keyEntry, decision.Route) {
+		dl.Infof("key '%s' denied access to route '%s'", keyEntry.Name, decision.Route)
+		providers.WriteError(w,
+			providers.NewAPIError(fmt.Sprintf("route '%s' is not allowed for this API key", decision.Route), providers.ErrorTypePermission),
+			http.StatusForbidden,
+		)
+		return true
+	}
+	req.Model = decision.Model
+	return false
+}
+
+func (g *Gateway) handleNonStreamingCompletion(ctx context.Context, w http.ResponseWriter, provider providers.Provider, providerType providers.ProviderType, req *providers.ChatCompletionRequest) {
 	resp, err := provider.ChatCompletion(ctx, req)
 	if err != nil {
 		g.writeProviderError(w, err)
 		return
 	}
 
+	// the reported model is the gateway's binding, not the upstream's self-report
+	// (a dated snapshot or server-side alias); log a differing upstream string so
+	// provider-side aliasing stays visible rather than silently normalized.
+	if resp.Model != "" && resp.Model != req.Model {
+		dl.Infof("upstream reported '%s' for binding '%s'", resp.Model, req.Model)
+	}
+	resp.Model = req.Model
 	if g.meters != nil && resp.Usage != nil {
 		tokenAttrs := metric.WithAttributes(
-			attribute.String("provider", resp.Model),
+			attribute.String("provider", string(providerType)),
 			attribute.String("model", req.Model),
 		)
 		g.meters.tokensPrompt.Add(ctx, int64(resp.Usage.PromptTokens), tokenAttrs)
@@ -228,6 +269,7 @@ func (g *Gateway) handleStreamingCompletion(ctx context.Context, w http.Response
 
 	sse.WriteHeaders()
 
+	loggedUpstreamModel := false
 	for event := range events {
 		if event.Err != nil {
 			dl.Errorf("stream error: %v", event.Err)
@@ -241,6 +283,13 @@ func (g *Gateway) handleStreamingCompletion(ctx context.Context, w http.Response
 		}
 
 		if event.Chunk != nil {
+			// the reported model is the gateway's binding; log a differing
+			// upstream self-report once per stream so aliasing stays visible.
+			if !loggedUpstreamModel && event.Chunk.Model != "" && event.Chunk.Model != req.Model {
+				dl.Infof("upstream reported '%s' for binding '%s'", event.Chunk.Model, req.Model)
+				loggedUpstreamModel = true
+			}
+			event.Chunk.Model = req.Model
 			if err := sse.WriteChunk(event.Chunk); err != nil {
 				dl.Errorf("error writing chunk: %v", err)
 				return

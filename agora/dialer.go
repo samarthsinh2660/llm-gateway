@@ -86,7 +86,7 @@ func (d *Dialer) HTTPClient(tunnelName string) (*http.Client, error) {
 	return client, nil
 }
 
-// Close detaches every attached tunnel exactly once. This is the only release
+// Close detaches every attached tunnel exactly once. this is the only release
 // path; because it runs only as the whole process exits, no backend can ever
 // strand a sibling that shares the tunnel.
 func (d *Dialer) Close(ctx context.Context) error {
