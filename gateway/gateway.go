@@ -157,6 +157,37 @@ func (g *Gateway) initProviders() error {
 		}
 	}
 
+	// initialize gemini provider. it is a *providers.OpenAI instance pointed at Google AI
+	// Studio's OpenAI-compatible endpoint, so it reuses the OpenAI client rather than a
+	// dedicated Gemini one. An empty base_url falls back to that endpoint.
+	if g.cfg.Providers.Gemini != nil && g.cfg.Providers.Gemini.APIKey != "" {
+		apiKey := g.cfg.Providers.Gemini.APIKey
+		baseURL := g.cfg.Providers.Gemini.BaseURL
+		if baseURL == "" {
+			baseURL = "https://generativelanguage.googleapis.com/v1beta/openai"
+		}
+
+		if g.cfg.Providers.Gemini.AgoraTunnel != "" {
+			client, derr := g.agoraDial(g.cfg.Providers.Gemini.AgoraTunnel)
+			if derr != nil {
+				return derr
+			}
+			g.providers[providers.ProviderGemini] = providers.NewOpenAIWithClient(apiKey, baseURL, client)
+			dl.Infof("initialized gemini provider via agora tunnel '%s'", g.cfg.Providers.Gemini.AgoraTunnel)
+		} else if g.cfg.Providers.Gemini.ZrokShareToken != "" {
+			access, err := NewAccess(g.cfg.Providers.Gemini.ZrokShareToken)
+			if err != nil {
+				return err
+			}
+			g.accesses = append(g.accesses, access)
+			g.providers[providers.ProviderGemini] = providers.NewOpenAIWithClient(apiKey, baseURL, access.HTTPClient())
+			dl.Infof("initialized gemini provider via zrok share '%s'", g.cfg.Providers.Gemini.ZrokShareToken)
+		} else {
+			g.providers[providers.ProviderGemini] = providers.NewOpenAI(apiKey, baseURL)
+			dl.Infof("initialized gemini provider at '%s'", baseURL)
+		}
+	}
+
 	// initialize anthropic provider
 	if g.cfg.Providers.Anthropic != nil && g.cfg.Providers.Anthropic.APIKey != "" {
 		apiKey := g.cfg.Providers.Anthropic.APIKey

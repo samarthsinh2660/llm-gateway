@@ -11,7 +11,8 @@ type ProviderType string
 const (
 	ProviderOpenAI    ProviderType = "openai"
 	ProviderAnthropic ProviderType = "anthropic"
-	ProviderLocal    ProviderType = "local"
+	ProviderGemini    ProviderType = "gemini"
+	ProviderLocal     ProviderType = "local"
 )
 
 // Router routes models to their appropriate providers.
@@ -28,6 +29,7 @@ func NewRouter(providers map[ProviderType]Provider) *Router {
 // Routing rules:
 // - gpt-*, o1-*, o3-* -> OpenAI
 // - claude-* -> Anthropic
+// - gemini-*, gemma-* -> Gemini (dash-separated only; "gemma4:e4b" stays Local)
 // - everything else -> Local
 func (r *Router) Route(model string) (Provider, ProviderType, error) {
 	providerType := r.resolveProvider(model)
@@ -54,6 +56,14 @@ func (r *Router) resolveProvider(model string) ProviderType {
 	// anthropic models
 	if strings.HasPrefix(lower, "claude-") {
 		return ProviderAnthropic
+	}
+
+	// gemini/gemma models served via Google AI Studio, e.g. "gemini-2.5-flash",
+	// "gemma-3-27b-it". The dash-separated "gemma-" prefix deliberately excludes
+	// "gemma4:e4b" (colon-separated) — that id stays on the Local/Ollama fallback
+	// below so it keeps working whenever that setup comes back.
+	if strings.HasPrefix(lower, "gemini-") || strings.HasPrefix(lower, "gemma-") {
+		return ProviderGemini
 	}
 
 	// default to local for all other models (llama, mistral, etc.)

@@ -39,6 +39,7 @@ type ZrokShareConfig struct {
 type ProvidersConfig struct {
 	OpenAI    *OpenAIConfig
 	Anthropic *AnthropicConfig
+	Gemini    *GeminiConfig
 	Local     *LocalConfig
 }
 
@@ -50,6 +51,15 @@ type OpenAIConfig struct {
 }
 
 type AnthropicConfig struct {
+	APIKey         string
+	BaseURL        string
+	ZrokShareToken string
+	AgoraTunnel    string
+}
+
+// GeminiConfig is Google AI Studio's OpenAI-compatible endpoint — the gemini provider
+// is a *providers.OpenAI instance pointed at it, so the config shape matches OpenAI's.
+type GeminiConfig struct {
 	APIKey         string
 	BaseURL        string
 	ZrokShareToken string
@@ -225,6 +235,11 @@ func (c *Config) validateProviders() error {
 	}
 	if p := c.Providers.Anthropic; p != nil {
 		if err := check("anthropic", p.APIKey, p.ZrokShareToken, p.AgoraTunnel); err != nil {
+			return err
+		}
+	}
+	if p := c.Providers.Gemini; p != nil {
+		if err := check("gemini", p.APIKey, p.ZrokShareToken, p.AgoraTunnel); err != nil {
 			return err
 		}
 	}
