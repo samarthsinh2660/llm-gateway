@@ -86,16 +86,25 @@ func TestRouterRouteProviderNotConfigured(t *testing.T) {
 		ProviderLocal: &mockProvider{name: "local"},
 	})
 
-	// should fail for openai model
-	_, _, err := router.Route("gpt-4")
+	// should fail for openai model, and still report which provider it resolved to —
+	// callers (gateway/handler.go) build the client-facing error message from this value,
+	// so a lost providerType here means a client sees "provider '' is not configured"
+	// instead of the actual provider name.
+	_, providerType, err := router.Route("gpt-4")
 	if err == nil {
 		t.Error("expected error for unconfigured provider")
 	}
+	if providerType != ProviderOpenAI {
+		t.Errorf("providerType = %q on error, want %q", providerType, ProviderOpenAI)
+	}
 
 	// should fail for anthropic model
-	_, _, err = router.Route("claude-3-opus")
+	_, providerType, err = router.Route("claude-3-opus")
 	if err == nil {
 		t.Error("expected error for unconfigured provider")
+	}
+	if providerType != ProviderAnthropic {
+		t.Errorf("providerType = %q on error, want %q", providerType, ProviderAnthropic)
 	}
 
 	// should succeed for local model

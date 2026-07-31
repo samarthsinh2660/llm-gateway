@@ -36,7 +36,7 @@ func (r *Router) Route(model string) (Provider, ProviderType, error) {
 
 	provider, ok := r.providers[providerType]
 	if !ok {
-		return nil, "", fmt.Errorf("provider '%s' not configured for model '%s'", providerType, model)
+		return nil, providerType, fmt.Errorf("provider '%s' not configured for model '%s'", providerType, model)
 	}
 
 	return provider, providerType, nil
