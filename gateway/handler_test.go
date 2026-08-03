@@ -245,7 +245,7 @@ func TestStreamingChannelCloseWithoutTerminalEvent(t *testing.T) {
 	}}
 
 	rr := httptest.NewRecorder()
-	g.handleStreamingCompletion(context.Background(), rr, provider, &providers.ChatCompletionRequest{})
+	g.handleStreamingCompletion(context.Background(), rr, provider, providers.ProviderOpenAI, &providers.ChatCompletionRequest{})
 
 	body := rr.Body.String()
 	if strings.Contains(body, "data: [DONE]") {
@@ -264,7 +264,7 @@ func TestStreamingDoneEmitsDoneSentinel(t *testing.T) {
 	}}
 
 	rr := httptest.NewRecorder()
-	g.handleStreamingCompletion(context.Background(), rr, provider, &providers.ChatCompletionRequest{})
+	g.handleStreamingCompletion(context.Background(), rr, provider, providers.ProviderOpenAI, &providers.ChatCompletionRequest{})
 
 	body := rr.Body.String()
 	if !strings.HasSuffix(body, "data: [DONE]\n\n") {

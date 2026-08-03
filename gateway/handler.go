@@ -170,7 +170,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if req.Stream {
-		g.handleStreamingCompletion(ctx, w, provider, &req)
+		g.handleStreamingCompletion(ctx, w, provider, providerType, &req)
 	} else {
 		g.handleNonStreamingCompletion(ctx, w, provider, providerType, &req)
 	}
@@ -241,6 +241,17 @@ func (g *Gateway) handleNonStreamingCompletion(ctx context.Context, w http.Respo
 		dl.Infof("upstream reported '%s' for binding '%s'", resp.Model, req.Model)
 	}
 	resp.Model = req.Model
+	if providerType == providers.ProviderGemini {
+		for i := range resp.Choices {
+			msg := resp.Choices[i].Message
+			if msg == nil {
+				continue
+			}
+			if content, ok := msg.Content.(string); ok {
+				msg.Content = stripThoughtBlock(content)
+			}
+		}
+	}
 	if g.meters != nil && resp.Usage != nil {
 		tokenAttrs := metric.WithAttributes(
 			attribute.String("provider", string(providerType)),
@@ -254,7 +265,7 @@ func (g *Gateway) handleNonStreamingCompletion(ctx context.Context, w http.Respo
 	json.NewEncoder(w).Encode(resp)
 }
 
-func (g *Gateway) handleStreamingCompletion(ctx context.Context, w http.ResponseWriter, provider providers.Provider, req *providers.ChatCompletionRequest) {
+func (g *Gateway) handleStreamingCompletion(ctx context.Context, w http.ResponseWriter, provider providers.Provider, providerType providers.ProviderType, req *providers.ChatCompletionRequest) {
 	sse := providers.NewSSEWriter(w)
 	if sse == nil {
 		providers.WriteError(w, providers.NewAPIError("streaming not supported", providers.ErrorTypeServer), http.StatusInternalServerError)
@@ -268,6 +279,11 @@ func (g *Gateway) handleStreamingCompletion(ctx context.Context, w http.Response
 	}
 
 	sse.WriteHeaders()
+
+	var thought *thoughtStripper
+	if providerType == providers.ProviderGemini {
+		thought = &thoughtStripper{}
+	}
 
 	loggedUpstreamModel := false
 	for event := range events {
@@ -290,6 +306,21 @@ func (g *Gateway) handleStreamingCompletion(ctx context.Context, w http.Response
 				loggedUpstreamModel = true
 			}
 			event.Chunk.Model = req.Model
+			if thought != nil {
+				for i := range event.Chunk.Choices {
+					delta := event.Chunk.Choices[i].Delta
+					if delta == nil || delta.Content == "" {
+						continue
+					}
+					delta.Content = thought.filter(delta.Content)
+				}
+				// a chunk that was pure thought text resolves to empty content (and
+				// carries no finish_reason/tool_calls) on every choice — drop it
+				// rather than emit an empty delta.
+				if len(event.Chunk.Choices) > 0 && allDeltasEmpty(event.Chunk.Choices) {
+					continue
+				}
+			}
 			if err := sse.WriteChunk(event.Chunk); err != nil {
 				dl.Errorf("error writing chunk: %v", err)
 				return
