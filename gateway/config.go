@@ -159,6 +159,14 @@ func (c *Config) expandEnv() error {
 				return err
 			}
 		}
+		if p := c.Providers.Gemini; p != nil {
+			if err := expand("providers.gemini.api_key", &p.APIKey); err != nil {
+				return err
+			}
+			if err := expand("providers.gemini.base_url", &p.BaseURL); err != nil {
+				return err
+			}
+		}
 		if l := c.Providers.Local; l != nil {
 			if err := expand("providers.local.base_url", &l.BaseURL); err != nil {
 				return err
@@ -198,6 +206,9 @@ func (c *Config) normalize() {
 		p.AgoraTunnel = strings.TrimSpace(p.AgoraTunnel)
 	}
 	if p := c.Providers.Anthropic; p != nil {
+		p.AgoraTunnel = strings.TrimSpace(p.AgoraTunnel)
+	}
+	if p := c.Providers.Gemini; p != nil {
 		p.AgoraTunnel = strings.TrimSpace(p.AgoraTunnel)
 	}
 	if l := c.Providers.Local; l != nil {
